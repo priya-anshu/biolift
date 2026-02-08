@@ -1,0 +1,170 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --color-night-bg: #000000;
+  --color-night-card: #111111;
+  --color-night-accent: #ff2c2c;
+  --color-night-text-primary: #ffffff;
+  --color-night-text-secondary: #aaaaaa;
+  --color-night-border: #333333;
+  --color-night-hover: #1a1a1a;
+
+  --color-day-bg: #f8f9fa;
+  --color-day-card: #ffffff;
+  --color-day-accent-primary: #007bff;
+  --color-day-accent-secondary: #28a745;
+  --color-day-text-primary: #222222;
+  --color-day-text-secondary: #555555;
+  --color-day-border: #e9ecef;
+  --color-day-hover: #f1f3f4;
+
+  --font-orbitron: var(--font-orbitron);
+  --font-poppins: var(--font-poppins);
+  --font-urbanist: var(--font-urbanist);
+
+  --shadow-card: 0 4px 6px -1px rgb(0 0 0 / 0.1),
+    0 2px 4px -1px rgb(0 0 0 / 0.06);
+  --shadow-card-dark: 0 4px 6px -1px rgb(0 0 0 / 0.3),
+    0 2px 4px -1px rgb(0 0 0 / 0.2);
+  --shadow-glow: 0 0 20px rgb(255 44 44 / 0.3);
+  --shadow-glow-blue: 0 0 20px rgb(0 123 255 / 0.3);
+}
+
+@layer base {
+  body {
+    @apply bg-day-bg text-day-text-primary font-poppins transition-colors duration-300 dark:bg-night-bg dark:text-night-text-primary;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+}
+
+html.dark body {
+  background-color: var(--color-night-bg);
+  color: var(--color-night-text-primary);
+}
+
+@layer components {
+  .card {
+    @apply rounded-xl border border-day-border bg-day-card shadow-card transition-all duration-300 dark:border-night-border dark:bg-night-card dark:shadow-card-dark;
+  }
+
+  .card-hover {
+    @apply transition-all duration-300 hover:-translate-y-1 hover:shadow-lg dark:hover:shadow-xl;
+  }
+
+  .btn-primary {
+    @apply rounded-lg bg-gradient-to-r from-sky-600 to-emerald-600 px-6 py-3 font-semibold text-white transition-all duration-300 hover:scale-105 hover:shadow-glow-blue focus:outline-none focus:ring-2 focus:ring-day-accent-primary dark:from-red-600 dark:to-red-700 dark:hover:shadow-glow dark:focus:ring-night-accent;
+  }
+
+  .btn-secondary {
+    @apply rounded-lg bg-day-accent-secondary px-6 py-3 font-semibold text-white transition-all duration-300 hover:scale-105 hover:shadow-glow focus:outline-none focus:ring-2 focus:ring-day-accent-secondary dark:bg-night-accent dark:focus:ring-night-accent;
+  }
+
+  .btn-ghost {
+    @apply rounded-lg border border-day-border bg-transparent px-6 py-3 font-semibold text-day-text-primary transition-all duration-300 hover:bg-day-hover dark:border-night-border dark:text-night-text-primary dark:hover:bg-night-hover;
+  }
+
+  .input-field {
+    @apply w-full rounded-lg border border-day-border bg-day-card px-4 py-3 text-day-text-primary placeholder-day-text-secondary transition-all duration-300 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-day-accent-primary dark:border-night-border dark:bg-night-card dark:text-night-text-primary dark:placeholder-night-text-secondary dark:focus:ring-night-accent;
+  }
+
+  .badge {
+    @apply inline-flex items-center rounded-full px-3 py-1 text-xs font-medium;
+  }
+
+  .badge-primary {
+    @apply bg-day-accent-primary text-white dark:bg-night-accent;
+  }
+
+  .badge-secondary {
+    @apply bg-day-accent-secondary text-white;
+  }
+
+  .badge-ghost {
+    @apply bg-day-hover text-day-text-secondary dark:bg-night-hover dark:text-night-text-secondary;
+  }
+
+  .skeleton {
+    @apply animate-pulse rounded bg-day-border dark:bg-night-border;
+  }
+
+  .custom-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-day-border) transparent;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    background-color: var(--color-day-border);
+    border-radius: 3px;
+  }
+
+  .dark .custom-scrollbar::-webkit-scrollbar-thumb {
+    background-color: var(--color-night-border);
+  }
+}
+
+@layer utilities {
+  .text-linear {
+    @apply bg-linear-to-r from-day-accent-primary to-day-accent-secondary bg-clip-text text-transparent dark:from-night-accent dark:to-night-accent;
+  }
+
+  .bg-linear-primary {
+    @apply bg-linear-to-r from-day-accent-primary to-day-accent-secondary;
+  }
+
+  .bg-linear-night {
+    @apply bg-linear-to-r from-night-accent to-red-600;
+  }
+
+  .animate-fade-in {
+    animation: fadeIn 0.5s ease-in-out;
+  }
+
+  .animate-slide-up {
+    animation: slideUp 0.3s ease-out;
+  }
+
+  .animate-pulse-slow {
+    animation: pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
+
+  .animate-bounce-slow {
+    animation: bounce 2s infinite;
+  }
+
+  .animate-spin-slow {
+    animation: spin 3s linear infinite;
+  }
+}
+
+@keyframes fadeIn {
+  0% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+@keyframes slideUp {
+  0% {
+    transform: translateY(10px);
+    opacity: 0;
+  }
+  100% {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
