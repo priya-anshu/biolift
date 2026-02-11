@@ -11,6 +11,7 @@ import {
   Dumbbell,
   LayoutGrid,
   LineChart,
+  LogOut,
   Menu,
   Moon,
   Settings,
@@ -24,36 +25,59 @@ import {
 } from "lucide-react";
 import { useAuth } from "@/lib/auth/AuthContext";
 import { useTheme } from "@/lib/theme/ThemeContext";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase/client";
+import { useRouter } from "next/navigation";
 
 export default function DashboardHeader() {
-  const { user } = useAuth();
+  const { user, signOut } = useAuth();
   const { isDarkMode, toggleTheme } = useTheme();
+  const router = useRouter();
   const pathname = usePathname();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const [profileName, setProfileName] = useState<string | null>(null);
   const [profileEmail, setProfileEmail] = useState<string | null>(null);
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [profileLevel, setProfileLevel] = useState<string | null>(null);
   const [profilePoints, setProfilePoints] = useState<number | null>(null);
+  const userMenuRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!user) return;
     const loadProfile = async () => {
       const { data: profile } = await supabase
         .from("profiles")
-        .select("name,email,avatar_url,level,points")
+        .select("name,email,avatar_url")
         .eq("auth_user_id", user.id)
         .maybeSingle();
       setProfileName(profile?.name ?? null);
       setProfileEmail(profile?.email ?? user.email ?? null);
       setAvatarUrl(profile?.avatar_url ?? user.user_metadata?.avatar_url ?? null);
-      setProfileLevel(profile?.level ?? null);
-      setProfilePoints(profile?.points ?? null);
+      setProfileLevel((user.user_metadata?.level as string | undefined) ?? null);
+      setProfilePoints((user.user_metadata?.points as number | undefined) ?? null);
     };
     loadProfile();
   }, [user]);
+
+  useEffect(() => {
+    if (!isUserMenuOpen) return;
+    const onPointerDown = (event: MouseEvent) => {
+      if (!userMenuRef.current) return;
+      if (!userMenuRef.current.contains(event.target as Node)) {
+        setIsUserMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    return () => document.removeEventListener("mousedown", onPointerDown);
+  }, [isUserMenuOpen]);
+
+  const handleSignOut = async () => {
+    await signOut();
+    setIsUserMenuOpen(false);
+    setIsMenuOpen(false);
+    router.replace("/signin");
+  };
 
   const displayName =
     profileName ??
@@ -99,33 +123,22 @@ export default function DashboardHeader() {
         </div>
           </div>
         <nav className="hidden items-center gap-6 text-sm font-medium text-day-text-secondary dark:text-night-text-secondary md:flex">
-          <Link
-            href="/dashboard"
-            className="rounded-lg bg-slate-100 px-3 py-1 text-slate-900"
-          >
-            Dashboard
-          </Link>
-          <Link href="/dashboard/workout" className="hover:text-day-text-primary dark:hover:text-night-text-primary">
-            Workout
-          </Link>
-          <Link href="/dashboard/ranking" className="hover:text-day-text-primary dark:hover:text-night-text-primary">
-            Ranking
-          </Link>
-          <Link href="/dashboard/progress" className="hover:text-day-text-primary dark:hover:text-night-text-primary">
-            Progress
-          </Link>
-          <Link href="/dashboard/diet" className="hover:text-day-text-primary dark:hover:text-night-text-primary">
-            Diet
-          </Link>
-          <Link href="/dashboard/social" className="hover:text-day-text-primary dark:hover:text-night-text-primary">
-            Social
-          </Link>
-          <Link href="/dashboard/shop" className="hover:text-day-text-primary dark:hover:text-night-text-primary">
-            Shop
-          </Link>
-          <Link href="/dashboard/profile" className="hover:text-day-text-primary dark:hover:text-night-text-primary">
-            Profile
-          </Link>
+          {navItems.map((item) => {
+            const isActive = pathname === item.href;
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                className={
+                  isActive
+                    ? "rounded-lg bg-slate-100 px-3 py-1 text-slate-900 dark:bg-night-hover dark:text-night-text-primary"
+                    : "hover:text-day-text-primary dark:hover:text-night-text-primary"
+                }
+              >
+                {item.label}
+              </Link>
+            );
+          })}
         </nav>
         <div className="flex items-center gap-3 md:gap-4">
           <button
@@ -141,21 +154,55 @@ export default function DashboardHeader() {
             </button>
             <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-red-500" />
           </div>
-          <div className="flex items-center gap-2 rounded-full border border-day-border bg-day-card px-2 py-1 dark:border-night-border dark:bg-night-card">
-            <div className="flex h-8 w-8 items-center justify-center overflow-hidden rounded-full bg-day-border text-xs font-semibold text-day-text-secondary dark:bg-night-border dark:text-night-text-secondary">
-              {avatarUrl ? (
-                <Image src={avatarUrl} alt={displayName} width={32} height={32} />
-              ) : (
-                initials || <User className="h-4 w-4 text-day-text-secondary dark:text-night-text-secondary" />
-              )}
-            </div>
-            <span className="text-sm font-medium text-day-text-primary dark:text-night-text-primary lg:hidden">
-              {displayName}
-            </span>
-            <span className="hidden text-sm font-medium text-day-text-primary dark:text-night-text-primary lg:inline">
-              {displayEmail}
-            </span>
-            <ChevronDown className="h-4 w-4 text-day-text-secondary dark:text-night-text-secondary" />
+          <div className="relative" ref={userMenuRef}>
+            <button
+              type="button"
+              onClick={() => setIsUserMenuOpen((prev) => !prev)}
+              className="flex items-center gap-2 rounded-full border border-day-border bg-day-card px-2 py-1 dark:border-night-border dark:bg-night-card"
+            >
+              <div className="flex h-8 w-8 items-center justify-center overflow-hidden rounded-full bg-day-border text-xs font-semibold text-day-text-secondary dark:bg-night-border dark:text-night-text-secondary">
+                {avatarUrl ? (
+                  <Image src={avatarUrl} alt={displayName} width={32} height={32} />
+                ) : (
+                  initials || <User className="h-4 w-4 text-day-text-secondary dark:text-night-text-secondary" />
+                )}
+              </div>
+              <span className="text-sm font-medium text-day-text-primary dark:text-night-text-primary lg:hidden">
+                {displayName}
+              </span>
+              <span className="hidden text-sm font-medium text-day-text-primary dark:text-night-text-primary lg:inline">
+                {displayEmail}
+              </span>
+              <ChevronDown className="h-4 w-4 text-day-text-secondary dark:text-night-text-secondary" />
+            </button>
+            {isUserMenuOpen ? (
+              <div className="absolute right-0 top-12 z-40 w-52 rounded-xl border border-day-border bg-day-card p-1.5 shadow-xl dark:border-night-border dark:bg-night-card">
+                <Link
+                  href="/dashboard/profile"
+                  onClick={() => setIsUserMenuOpen(false)}
+                  className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-day-text-primary hover:bg-day-hover dark:text-night-text-primary dark:hover:bg-night-hover"
+                >
+                  <User className="h-4 w-4" />
+                  Profile
+                </Link>
+                <Link
+                  href="/dashboard/profile"
+                  onClick={() => setIsUserMenuOpen(false)}
+                  className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-day-text-primary hover:bg-day-hover dark:text-night-text-primary dark:hover:bg-night-hover"
+                >
+                  <Settings className="h-4 w-4" />
+                  Settings
+                </Link>
+                <button
+                  type="button"
+                  onClick={handleSignOut}
+                  className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-red-600 hover:bg-day-hover dark:hover:bg-night-hover"
+                >
+                  <LogOut className="h-4 w-4" />
+                  Sign out
+                </button>
+              </div>
+            ) : null}
           </div>
         </div>
       </div>
@@ -262,6 +309,14 @@ export default function DashboardHeader() {
                   );
                 })}
               </div>
+              <button
+                type="button"
+                onClick={handleSignOut}
+                className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl border border-red-500/40 bg-red-500/10 px-3 py-2.5 text-sm font-semibold text-red-600"
+              >
+                <LogOut className="h-4 w-4" />
+                Sign out
+              </button>
             </div>
           </aside>
         </div>

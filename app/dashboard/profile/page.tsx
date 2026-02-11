@@ -1,6 +1,6 @@
 "use client";
 
-import { motion } from "framer-motion";
+import { AnimatePresence, motion } from "framer-motion";
 import {
   Award,
   Bell,
@@ -16,6 +16,7 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase/client";
 import { useAuth } from "@/lib/auth/AuthContext";
 
@@ -25,6 +26,7 @@ const sectionVariants = {
 };
 
 type Profile = {
+  id: string;
   name: string | null;
   email: string | null;
   avatar_url: string | null;
@@ -32,6 +34,42 @@ type Profile = {
   membership: string | null;
   level: string | null;
   points: number | null;
+};
+
+type ProfileSettings = {
+  two_factor_enabled: boolean;
+  login_alerts: boolean;
+  profile_visibility: "private" | "friends" | "public";
+  data_sharing_analytics: boolean;
+  notify_workout_reminders: boolean;
+  notify_progress_milestones: boolean;
+  notify_social_updates: boolean;
+  notify_marketing: boolean;
+  billing_plan: "free" | "premium" | "elite";
+  auto_renew: boolean;
+  currency: "USD" | "EUR" | "INR";
+  language: "en" | "es" | "hi";
+  timezone: string;
+  units: "metric" | "imperial";
+  date_format: "MM/DD/YYYY" | "DD/MM/YYYY";
+};
+
+const defaultProfileSettings: ProfileSettings = {
+  two_factor_enabled: false,
+  login_alerts: true,
+  profile_visibility: "private",
+  data_sharing_analytics: false,
+  notify_workout_reminders: true,
+  notify_progress_milestones: true,
+  notify_social_updates: true,
+  notify_marketing: false,
+  billing_plan: "free",
+  auto_renew: true,
+  currency: "USD",
+  language: "en",
+  timezone: "Asia/Kolkata",
+  units: "metric",
+  date_format: "DD/MM/YYYY",
 };
 
 const membershipTiers = [
@@ -68,26 +106,150 @@ const recentAchievements = [
   { name: "Energy Boost", description: "Burned 2000+ calories", date: "2 weeks ago" },
 ];
 
+function SettingToggle({
+  label,
+  checked,
+  onChange,
+}: {
+  label: string;
+  checked: boolean;
+  onChange: (value: boolean) => void;
+}) {
+  return (
+    <label className="flex items-center justify-between rounded-xl border border-day-border/70 bg-day-card/60 px-4 py-3 transition hover:border-day-accent-primary/40 dark:border-night-border/70 dark:bg-night-card/60 dark:hover:border-night-accent/50">
+      <span className="text-sm font-medium text-day-text-primary dark:text-night-text-primary">
+        {label}
+      </span>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        onClick={() => onChange(!checked)}
+        className={`relative inline-flex h-6 w-11 items-center rounded-full transition ${
+          checked
+            ? "bg-day-accent-primary dark:bg-night-accent"
+            : "bg-slate-300 dark:bg-slate-700"
+        }`}
+      >
+        <span
+          className={`inline-block h-4 w-4 transform rounded-full bg-white transition ${
+            checked ? "translate-x-6" : "translate-x-1"
+          }`}
+        />
+      </button>
+    </label>
+  );
+}
+
+function SettingSelect<T extends string>({
+  label,
+  value,
+  onChange,
+  options,
+}: {
+  label: string;
+  value: T;
+  onChange: (value: T) => void;
+  options: Array<{ label: string; value: T }>;
+}) {
+  return (
+    <label className="block">
+      <span className="mb-2 block text-xs font-semibold uppercase tracking-wide text-day-text-secondary dark:text-night-text-secondary">
+        {label}
+      </span>
+      <select
+        value={value}
+        onChange={(event) => onChange(event.target.value as T)}
+        className="w-full rounded-xl border border-day-border/70 bg-day-card/80 px-4 py-3 text-sm font-medium text-day-text-primary shadow-sm transition focus:border-transparent focus:outline-none focus:ring-2 focus:ring-day-accent-primary dark:border-night-border/70 dark:bg-night-card/80 dark:text-night-text-primary dark:focus:ring-night-accent"
+      >
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
 export default function ProfilePage() {
-  const { user } = useAuth();
+  const router = useRouter();
+  const { user, signOut } = useAuth();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [activeSettings, setActiveSettings] = useState<string | null>(null);
+  const [settings, setSettings] = useState<ProfileSettings>(defaultProfileSettings);
+  const [settingsLoading, setSettingsLoading] = useState(false);
+  const [settingsSaving, setSettingsSaving] = useState(false);
+  const [settingsMessage, setSettingsMessage] = useState<string | null>(null);
   const [editData, setEditData] = useState({
     name: "",
     email: "",
     bio: "Fitness enthusiast passionate about health and wellness",
   });
 
+  const settingsCards = [
+    {
+      key: "privacy",
+      label: "Privacy & Security",
+      icon: Shield,
+      description: "Password, 2FA, and data controls",
+    },
+    {
+      key: "notifications",
+      label: "Notifications",
+      icon: Bell,
+      description: "Push, email, and reminders",
+    },
+    {
+      key: "billing",
+      label: "Billing & Payment",
+      icon: CreditCard,
+      description: "Plan, invoices, and payment methods",
+    },
+    {
+      key: "language",
+      label: "Language & Region",
+      icon: Globe,
+      description: "Locale, timezone, and units",
+    },
+  ];
+
   useEffect(() => {
     if (!user) return;
     const loadProfile = async () => {
-      const { data } = await supabase
+      let data:
+        | {
+            id: string;
+            name: string | null;
+            email: string | null;
+            avatar_url: string | null;
+            rank?: string | null;
+            membership?: string | null;
+            level?: string | null;
+            points?: number | null;
+          }
+        | null = null;
+
+      const byAuthUser = await supabase
         .from("profiles")
-        .select("name,email,avatar_url,rank,membership,level,points")
+        .select("id,name,email,avatar_url")
         .eq("auth_user_id", user.id)
         .maybeSingle();
+
+      if (!byAuthUser.error) {
+        data = byAuthUser.data;
+      } else {
+        // Fallback for deployments where profiles.id is auth.users.id and auth_user_id column is absent.
+        const byId = await supabase
+          .from("profiles")
+          .select("id,name,email,avatar_url")
+          .eq("id", user.id)
+          .maybeSingle();
+        data = byId.data;
+      }
       const profileData = {
+        id: data?.id ?? "",
         name: data?.name ?? user.user_metadata?.name ?? user.user_metadata?.full_name ?? "",
         email: data?.email ?? user.email ?? "",
         avatar_url: data?.avatar_url ?? user.user_metadata?.avatar_url ?? null,
@@ -105,6 +267,44 @@ export default function ProfilePage() {
     };
     loadProfile();
   }, [user]);
+
+  useEffect(() => {
+    if (!profile?.id) return;
+    const loadSettings = async () => {
+      setSettingsLoading(true);
+      setSettingsMessage(null);
+      const { data, error } = await supabase
+        .from("profile_settings")
+        .select(
+          "two_factor_enabled,login_alerts,profile_visibility,data_sharing_analytics,notify_workout_reminders,notify_progress_milestones,notify_social_updates,notify_marketing,billing_plan,auto_renew,currency,language,timezone,units,date_format",
+        )
+        .eq("user_id", profile.id)
+        .maybeSingle();
+
+      if (error) {
+        setSettingsLoading(false);
+        setSettingsMessage("Settings table is not ready yet. Run profile_settings SQL first.");
+        return;
+      }
+
+      if (data) {
+        setSettings({ ...defaultProfileSettings, ...data });
+      } else {
+        setSettings(defaultProfileSettings);
+      }
+      setSettingsLoading(false);
+    };
+    loadSettings();
+  }, [profile?.id]);
+
+  useEffect(() => {
+    if (!activeSettings) return;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previous;
+    };
+  }, [activeSettings]);
 
   const initials = useMemo(() => {
     if (!profile?.name) return "B";
@@ -136,6 +336,48 @@ export default function ProfilePage() {
     }));
     setIsEditing(false);
   };
+
+  const updateSetting = <K extends keyof ProfileSettings>(
+    key: K,
+    value: ProfileSettings[K],
+  ) => {
+    setSettings((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const handleSaveSettings = async () => {
+    if (!profile?.id) {
+      setSettingsMessage(
+        "Profile row not found for this account. Sign out/in once, then retry.",
+      );
+      return;
+    }
+    setSettingsSaving(true);
+    setSettingsMessage(null);
+    const payload = {
+      user_id: profile.id,
+      ...settings,
+      updated_at: new Date().toISOString(),
+    };
+    const { error } = await supabase.from("profile_settings").upsert(payload, {
+      onConflict: "user_id",
+    });
+    setSettingsSaving(false);
+    if (error) {
+      console.error("Failed to save profile settings:", error);
+    }
+    setSettingsMessage(
+      error
+        ? `Could not save settings: ${error.message}`
+        : "Settings saved successfully.",
+    );
+  };
+
+  const handleSignOut = async () => {
+    await signOut();
+    router.replace("/signin");
+  };
+
+  const activeSettingsItem = settingsCards.find((item) => item.key === activeSettings);
 
   return (
     <div className="space-y-6 text-day-text-primary dark:text-night-text-primary">
@@ -205,13 +447,21 @@ export default function ProfilePage() {
             </div>
           </div>
 
-          <button
-            className="inline-flex items-center gap-2 rounded-full border border-day-border px-4 py-2 text-sm font-semibold text-day-text-secondary transition hover:bg-day-hover dark:border-night-border dark:text-night-text-secondary dark:hover:bg-night-hover"
-            onClick={() => setIsEditing((prev) => !prev)}
-          >
-            <Edit className="h-4 w-4" />
-            {isEditing ? "Cancel" : "Edit Profile"}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              className="inline-flex items-center gap-2 rounded-full border border-day-border px-4 py-2 text-sm font-semibold text-day-text-secondary transition hover:bg-day-hover dark:border-night-border dark:text-night-text-secondary dark:hover:bg-night-hover"
+              onClick={() => setIsEditing((prev) => !prev)}
+            >
+              <Edit className="h-4 w-4" />
+              {isEditing ? "Cancel" : "Edit Profile"}
+            </button>
+            <button
+              className="inline-flex items-center gap-2 rounded-full bg-night-accent px-4 py-2 text-sm font-semibold text-white transition hover:opacity-90"
+              onClick={handleSignOut}
+            >
+              Sign out
+            </button>
+          </div>
         </div>
       </motion.section>
 
@@ -419,32 +669,7 @@ export default function ProfilePage() {
       >
         <h3 className="text-lg font-semibold">Settings</h3>
         <div className="mt-4 grid gap-4 md:grid-cols-2">
-          {[
-            {
-              key: "privacy",
-              label: "Privacy & Security",
-              icon: Shield,
-              description: "Password, 2FA, and data controls",
-            },
-            {
-              key: "notifications",
-              label: "Notifications",
-              icon: Bell,
-              description: "Push, email, and reminders",
-            },
-            {
-              key: "billing",
-              label: "Billing & Payment",
-              icon: CreditCard,
-              description: "Plan, invoices, and payment methods",
-            },
-            {
-              key: "language",
-              label: "Language & Region",
-              icon: Globe,
-              description: "Locale, timezone, and units",
-            },
-          ].map((item) => {
+          {settingsCards.map((item) => {
             const Icon = item.icon;
             const isActive = activeSettings === item.key;
             return (
@@ -472,60 +697,205 @@ export default function ProfilePage() {
             );
           })}
         </div>
-
-        {activeSettings ? (
-          <div className="mt-6 rounded-2xl border border-day-border bg-day-hover p-4 text-sm text-day-text-secondary dark:border-night-border dark:bg-night-hover dark:text-night-text-secondary">
-            {activeSettings === "privacy" && (
-              <div className="space-y-2">
-                <div className="font-semibold text-day-text-primary dark:text-night-text-primary">
-                  Privacy & Security
-                </div>
-                <ul className="list-disc pl-5">
-                  <li>Password & login controls</li>
-                  <li>Two-factor authentication</li>
-                  <li>Manage connected devices</li>
-                </ul>
-              </div>
-            )}
-            {activeSettings === "notifications" && (
-              <div className="space-y-2">
-                <div className="font-semibold text-day-text-primary dark:text-night-text-primary">
-                  Notifications
-                </div>
-                <ul className="list-disc pl-5">
-                  <li>Workout reminders</li>
-                  <li>Progress milestones</li>
-                  <li>Community updates</li>
-                </ul>
-              </div>
-            )}
-            {activeSettings === "billing" && (
-              <div className="space-y-2">
-                <div className="font-semibold text-day-text-primary dark:text-night-text-primary">
-                  Billing & Payment
-                </div>
-                <ul className="list-disc pl-5">
-                  <li>Manage plan and renewals</li>
-                  <li>Payment methods</li>
-                  <li>Invoices and receipts</li>
-                </ul>
-              </div>
-            )}
-            {activeSettings === "language" && (
-              <div className="space-y-2">
-                <div className="font-semibold text-day-text-primary dark:text-night-text-primary">
-                  Language & Region
-                </div>
-                <ul className="list-disc pl-5">
-                  <li>App language</li>
-                  <li>Timezone & date format</li>
-                  <li>Metric vs. imperial units</li>
-                </ul>
-              </div>
-            )}
-          </div>
-        ) : null}
       </motion.section>
+
+      <AnimatePresence>
+        {activeSettings ? (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-lg"
+            onClick={() => setActiveSettings(null)}
+          >
+            <motion.div
+              initial={{ opacity: 0, y: 24, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 24, scale: 0.98 }}
+              transition={{ duration: 0.2 }}
+              className="max-h-[88vh] w-full max-w-3xl overflow-y-auto rounded-3xl border border-day-border/80 bg-day-card/95 shadow-[0_24px_80px_rgba(15,23,42,0.35)] dark:border-night-border/80 dark:bg-night-card/95"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="sticky top-0 z-10 border-b border-day-border/80 bg-gradient-to-r from-day-card via-day-hover/60 to-day-card px-5 py-4 backdrop-blur dark:border-night-border/80 dark:bg-gradient-to-r dark:from-night-card dark:via-night-hover/40 dark:to-night-card">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="text-lg font-semibold text-day-text-primary dark:text-night-text-primary">
+                      {activeSettingsItem?.label}
+                    </h4>
+                    <p className="text-xs text-day-text-secondary dark:text-night-text-secondary">
+                      {activeSettingsItem?.description}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setActiveSettings(null)}
+                    className="rounded-xl border border-day-border/80 p-2 text-day-text-secondary transition hover:bg-day-hover dark:border-night-border/80 dark:text-night-text-secondary dark:hover:bg-night-hover"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
+
+              <div className="space-y-5 px-5 py-5 text-sm">
+                {settingsLoading ? (
+                  <div className="rounded-xl border border-day-border/70 bg-day-hover/60 p-4 text-day-text-secondary dark:border-night-border/70 dark:bg-night-hover/60 dark:text-night-text-secondary">
+                    Loading settings...
+                  </div>
+                ) : null}
+
+                {!settingsLoading && activeSettings === "privacy" ? (
+                  <div className="space-y-4">
+                    <SettingToggle
+                      label="Two-factor authentication"
+                      checked={settings.two_factor_enabled}
+                      onChange={(value) => updateSetting("two_factor_enabled", value)}
+                    />
+                    <SettingToggle
+                      label="Login alerts"
+                      checked={settings.login_alerts}
+                      onChange={(value) => updateSetting("login_alerts", value)}
+                    />
+                    <SettingSelect
+                      label="Profile visibility"
+                      value={settings.profile_visibility}
+                      onChange={(value) => updateSetting("profile_visibility", value)}
+                      options={[
+                        { label: "Private", value: "private" },
+                        { label: "Friends", value: "friends" },
+                        { label: "Public", value: "public" },
+                      ]}
+                    />
+                    <SettingToggle
+                      label="Share anonymized analytics"
+                      checked={settings.data_sharing_analytics}
+                      onChange={(value) => updateSetting("data_sharing_analytics", value)}
+                    />
+                  </div>
+                ) : null}
+
+                {!settingsLoading && activeSettings === "notifications" ? (
+                  <div className="space-y-4">
+                    <SettingToggle
+                      label="Workout reminders"
+                      checked={settings.notify_workout_reminders}
+                      onChange={(value) => updateSetting("notify_workout_reminders", value)}
+                    />
+                    <SettingToggle
+                      label="Progress milestones"
+                      checked={settings.notify_progress_milestones}
+                      onChange={(value) => updateSetting("notify_progress_milestones", value)}
+                    />
+                    <SettingToggle
+                      label="Social updates"
+                      checked={settings.notify_social_updates}
+                      onChange={(value) => updateSetting("notify_social_updates", value)}
+                    />
+                    <SettingToggle
+                      label="Marketing emails"
+                      checked={settings.notify_marketing}
+                      onChange={(value) => updateSetting("notify_marketing", value)}
+                    />
+                  </div>
+                ) : null}
+
+                {!settingsLoading && activeSettings === "billing" ? (
+                  <div className="space-y-4">
+                    <SettingSelect
+                      label="Plan"
+                      value={settings.billing_plan}
+                      onChange={(value) => updateSetting("billing_plan", value)}
+                      options={[
+                        { label: "Free", value: "free" },
+                        { label: "Premium", value: "premium" },
+                        { label: "Elite", value: "elite" },
+                      ]}
+                    />
+                    <SettingSelect
+                      label="Currency"
+                      value={settings.currency}
+                      onChange={(value) => updateSetting("currency", value)}
+                      options={[
+                        { label: "USD", value: "USD" },
+                        { label: "EUR", value: "EUR" },
+                        { label: "INR", value: "INR" },
+                      ]}
+                    />
+                    <SettingToggle
+                      label="Auto-renew subscription"
+                      checked={settings.auto_renew}
+                      onChange={(value) => updateSetting("auto_renew", value)}
+                    />
+                  </div>
+                ) : null}
+
+                {!settingsLoading && activeSettings === "language" ? (
+                  <div className="space-y-4">
+                    <SettingSelect
+                      label="Language"
+                      value={settings.language}
+                      onChange={(value) => updateSetting("language", value)}
+                      options={[
+                        { label: "English", value: "en" },
+                        { label: "Spanish", value: "es" },
+                        { label: "Hindi", value: "hi" },
+                      ]}
+                    />
+                    <SettingSelect
+                      label="Timezone"
+                      value={settings.timezone}
+                      onChange={(value) => updateSetting("timezone", value)}
+                      options={[
+                        { label: "Asia/Kolkata (IST)", value: "Asia/Kolkata" },
+                        { label: "UTC", value: "UTC" },
+                        { label: "America/New_York (EST)", value: "America/New_York" },
+                        { label: "Europe/London (GMT)", value: "Europe/London" },
+                      ]}
+                    />
+                    <SettingSelect
+                      label="Units"
+                      value={settings.units}
+                      onChange={(value) => updateSetting("units", value)}
+                      options={[
+                        { label: "Metric (kg, cm)", value: "metric" },
+                        { label: "Imperial (lb, ft)", value: "imperial" },
+                      ]}
+                    />
+                    <SettingSelect
+                      label="Date format"
+                      value={settings.date_format}
+                      onChange={(value) => updateSetting("date_format", value)}
+                      options={[
+                        { label: "DD/MM/YYYY", value: "DD/MM/YYYY" },
+                        { label: "MM/DD/YYYY", value: "MM/DD/YYYY" },
+                      ]}
+                    />
+                  </div>
+                ) : null}
+
+                <div className="mt-2 flex flex-wrap items-center gap-3 border-t border-day-border/80 pt-4 dark:border-night-border/80">
+                  <button
+                    onClick={handleSaveSettings}
+                    disabled={settingsSaving || settingsLoading}
+                    className="rounded-xl bg-gradient-to-r from-day-accent-primary to-day-accent-secondary px-5 py-2.5 text-sm font-semibold text-white shadow-[0_10px_24px_rgba(0,123,255,0.28)] transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-60 dark:from-night-accent dark:to-red-600 dark:shadow-[0_10px_24px_rgba(255,44,44,0.25)]"
+                  >
+                    {settingsSaving ? "Saving..." : "Save Settings"}
+                  </button>
+                  <button
+                    onClick={() => setActiveSettings(null)}
+                    className="rounded-xl border border-day-border px-4 py-2.5 text-sm font-semibold text-day-text-secondary transition hover:bg-day-hover dark:border-night-border dark:text-night-text-secondary dark:hover:bg-night-hover"
+                  >
+                    Close
+                  </button>
+                  {settingsMessage ? (
+                    <p className="text-xs text-day-text-secondary dark:text-night-text-secondary">
+                      {settingsMessage}
+                    </p>
+                  ) : null}
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
     </div>
   );
 }
