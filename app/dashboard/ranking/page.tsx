@@ -6,6 +6,7 @@ import {
   Flame,
   Medal,
   Search,
+  ShieldCheck,
   Target,
   TrendingUp,
   Trophy,
@@ -34,6 +35,38 @@ type LeaderboardRow = {
   } | null;
 };
 
+type RawLeaderboardRow = Omit<LeaderboardRow, "profiles"> & {
+  profiles?:
+    | {
+        name: string | null;
+        email: string | null;
+        avatar_url: string | null;
+      }[]
+    | {
+        name: string | null;
+        email: string | null;
+        avatar_url: string | null;
+      }
+    | null;
+};
+
+type RankingWorkout = {
+  id: string;
+  type: string | null;
+  duration_minutes: number | null;
+  calories: number | null;
+  performed_at: string;
+};
+
+type RankingProgress = {
+  id: string;
+  metric: string;
+  value: number;
+  recorded_at: string;
+};
+
+type RankingCorrectionTable = "progress_entries" | "workouts";
+
 const sortOptions = [
   { key: "total_score", label: "Overall", icon: Trophy },
   { key: "strength_score", label: "Strength", icon: Zap },
@@ -42,15 +75,32 @@ const sortOptions = [
   { key: "improvement_score", label: "Improvement", icon: TrendingUp },
 ] as const;
 
-const tierStyles: Record<
-  string,
-  { tone: string; text: string; icon: typeof Trophy }
-> = {
-  Diamond: { tone: "bg-sky-100 dark:bg-sky-900/30", text: "text-sky-600 dark:text-sky-300", icon: Crown },
-  Platinum: { tone: "bg-slate-100 dark:bg-slate-800/40", text: "text-slate-600 dark:text-slate-300", icon: Trophy },
-  Gold: { tone: "bg-amber-100 dark:bg-amber-900/30", text: "text-amber-700 dark:text-amber-300", icon: Medal },
-  Silver: { tone: "bg-slate-100 dark:bg-slate-800/30", text: "text-slate-500 dark:text-slate-300", icon: Trophy },
-  Bronze: { tone: "bg-orange-100 dark:bg-orange-900/30", text: "text-orange-600 dark:text-orange-300", icon: Trophy },
+const tierStyles: Record<string, { tone: string; text: string; icon: typeof Trophy }> = {
+  Diamond: {
+    tone: "bg-sky-100 dark:bg-sky-900/30",
+    text: "text-sky-600 dark:text-sky-300",
+    icon: Crown,
+  },
+  Platinum: {
+    tone: "bg-slate-100 dark:bg-slate-800/40",
+    text: "text-slate-600 dark:text-slate-300",
+    icon: Trophy,
+  },
+  Gold: {
+    tone: "bg-amber-100 dark:bg-amber-900/30",
+    text: "text-amber-700 dark:text-amber-300",
+    icon: Medal,
+  },
+  Silver: {
+    tone: "bg-slate-100 dark:bg-slate-800/30",
+    text: "text-slate-500 dark:text-slate-300",
+    icon: Trophy,
+  },
+  Bronze: {
+    tone: "bg-orange-100 dark:bg-orange-900/30",
+    text: "text-orange-600 dark:text-orange-300",
+    icon: Trophy,
+  },
 };
 
 function getTierMeta(tier?: string | null) {
@@ -58,8 +108,106 @@ function getTierMeta(tier?: string | null) {
 }
 
 function formatScore(value: number | null | undefined) {
-  if (!value && value !== 0) return "0";
+  if (value === null || value === undefined) return "0";
   return Number(value).toFixed(0);
+}
+
+function calculateStreak(daySet: Set<string>) {
+  if (daySet.size === 0) return 0;
+  const latestDay = Array.from(daySet).sort().at(-1);
+  if (!latestDay) return 0;
+
+  let streak = 0;
+  const cursor = new Date(`${latestDay}T00:00:00Z`);
+
+  while (true) {
+    const key = cursor.toISOString().slice(0, 10);
+    if (!daySet.has(key)) break;
+    streak += 1;
+    cursor.setUTCDate(cursor.getUTCDate() - 1);
+  }
+
+  return streak;
+}
+
+function getTierByScore(totalScore: number) {
+  if (totalScore >= 750) return "Diamond";
+  if (totalScore >= 550) return "Platinum";
+  if (totalScore >= 350) return "Gold";
+  if (totalScore >= 200) return "Silver";
+  return "Bronze";
+}
+
+function buildLiveScores(
+  workouts: RankingWorkout[],
+  progress: RankingProgress[],
+  activityDays: number,
+  streakDays: number,
+) {
+  const strengthWorkouts = workouts.filter((workout) => {
+    const type = (workout.type ?? "").toLowerCase();
+    return type.includes("strength") || type.includes("upper") || type.includes("lower");
+  });
+  const cardioWorkouts = workouts.filter((workout) => {
+    const type = (workout.type ?? "").toLowerCase();
+    return type.includes("cardio") || type.includes("hiit") || type.includes("run");
+  });
+
+  const strengthCalories = strengthWorkouts.reduce(
+    (sum, workout) => sum + Number(workout.calories ?? 0),
+    0,
+  );
+  const cardioMinutes = cardioWorkouts.reduce(
+    (sum, workout) => sum + Number(workout.duration_minutes ?? 0),
+    0,
+  );
+
+  const heartEntries = progress.filter((entry) => entry.metric === "heart_rate");
+  const avgHeartRate = heartEntries.length
+    ? heartEntries.reduce((sum, entry) => sum + Number(entry.value), 0) /
+      heartEntries.length
+    : 0;
+
+  const weightEntries = progress
+    .filter((entry) => entry.metric === "body_weight")
+    .sort((a, b) => a.recorded_at.localeCompare(b.recorded_at));
+
+  const weightDelta =
+    weightEntries.length >= 2
+      ? Number(weightEntries[0].value) - Number(weightEntries[weightEntries.length - 1].value)
+      : 0;
+
+  const strengthScore = Math.round(
+    Math.min(1000, strengthCalories * 0.2 + strengthWorkouts.length * 20),
+  );
+  const staminaScore = Math.round(
+    Math.min(1000, cardioMinutes * 1.2 + avgHeartRate * 0.4),
+  );
+  const consistencyScore = Math.round(
+    Math.min(1000, activityDays * 40 + streakDays * 25),
+  );
+  const improvementScore = Math.round(
+    Math.min(
+      1000,
+      Math.max(0, weightDelta) * 60 + Math.min(workouts.length, 30) * 8,
+    ),
+  );
+
+  const totalScore = Math.round(
+    strengthScore * 0.35 +
+      staminaScore * 0.25 +
+      consistencyScore * 0.25 +
+      improvementScore * 0.15,
+  );
+
+  return {
+    strengthScore,
+    staminaScore,
+    consistencyScore,
+    improvementScore,
+    totalScore,
+    tier: getTierByScore(totalScore),
+  };
 }
 
 export default function RankingPage() {
@@ -71,95 +219,175 @@ export default function RankingPage() {
   const [activeMetric, setActiveMetric] =
     useState<(typeof sortOptions)[number]["key"]>("total_score");
   const [error, setError] = useState<string | null>(null);
-  const [eligibleDays, setEligibleDays] = useState(0);
-  const [isEligible, setIsEligible] = useState(false);
+  const [activityDays, setActivityDays] = useState(0);
+  const [streakDays, setStreakDays] = useState(0);
+  const [recentProgress, setRecentProgress] = useState<RankingProgress[]>([]);
+  const [recentWorkouts, setRecentWorkouts] = useState<RankingWorkout[]>([]);
+  const [correctionTable, setCorrectionTable] =
+    useState<RankingCorrectionTable>("progress_entries");
+  const [correctionRecordId, setCorrectionRecordId] = useState("");
+  const [correctionReason, setCorrectionReason] = useState("");
+  const [correctionSubmitting, setCorrectionSubmitting] = useState(false);
+  const [correctionStatus, setCorrectionStatus] = useState<string | null>(null);
+  const [correctionError, setCorrectionError] = useState<string | null>(null);
 
   useEffect(() => {
     const load = async () => {
       setLoading(true);
       setError(null);
 
-      const [{ data: profile }, { data: rows, error: lbError }] =
-        await Promise.all([
-          user
-            ? supabase
-                .from("profiles")
-                .select("id")
-                .eq("auth_user_id", user.id)
-                .maybeSingle()
-            : Promise.resolve({ data: null }),
-          supabase
-            .from("leaderboard")
-            .select(
-              "id,user_id,total_score,strength_score,stamina_score,consistency_score,improvement_score,tier,position,updated_at,profiles(name,email,avatar_url)",
-            )
-            .order("total_score", { ascending: false })
-            .limit(100),
-        ]);
+      if (!user) {
+        setProfileId(null);
+        setLeaderboard([]);
+        setLoading(false);
+        return;
+      }
 
-      if (lbError) {
+      let resolvedProfileId: string | null = null;
+
+      const byAuthUser = await supabase
+        .from("profiles")
+        .select("id")
+        .eq("auth_user_id", user.id)
+        .maybeSingle();
+
+      if (!byAuthUser.error) {
+        resolvedProfileId = byAuthUser.data?.id ?? null;
+      } else {
+        const byId = await supabase
+          .from("profiles")
+          .select("id")
+          .eq("id", user.id)
+          .maybeSingle();
+        resolvedProfileId = byId.data?.id ?? null;
+      }
+
+      setProfileId(resolvedProfileId);
+
+      const now = new Date();
+      const fourteenDayStart = new Date(now);
+      fourteenDayStart.setUTCHours(0, 0, 0, 0);
+      fourteenDayStart.setUTCDate(fourteenDayStart.getUTCDate() - 13);
+      const fourteenDayStartKey = fourteenDayStart.toISOString().slice(0, 10);
+
+      const thirtyDayStart = new Date(now);
+      thirtyDayStart.setUTCHours(0, 0, 0, 0);
+      thirtyDayStart.setUTCDate(thirtyDayStart.getUTCDate() - 29);
+
+      const leaderboardPromise = supabase
+        .from("leaderboard")
+        .select(
+          "id,user_id,total_score,strength_score,stamina_score,consistency_score,improvement_score,tier,position,updated_at,profiles(name,email,avatar_url)",
+        )
+        .order("total_score", { ascending: false })
+        .limit(100);
+
+      const progressPromise = resolvedProfileId
+        ? supabase
+            .from("progress_entries")
+            .select("id,metric,value,recorded_at")
+            .eq("user_id", resolvedProfileId)
+            .gte("recorded_at", thirtyDayStart.toISOString())
+            .order("recorded_at", { ascending: false })
+        : Promise.resolve({ data: null, error: null } as const);
+
+      const workoutsPromise = resolvedProfileId
+        ? supabase
+            .from("workouts")
+            .select("id,type,duration_minutes,calories,performed_at")
+            .eq("user_id", resolvedProfileId)
+            .gte("performed_at", thirtyDayStart.toISOString())
+            .order("performed_at", { ascending: false })
+        : Promise.resolve({ data: null, error: null } as const);
+
+      const [lbRes, progressRes, workoutsRes] = await Promise.all([
+        leaderboardPromise,
+        progressPromise,
+        workoutsPromise,
+      ]);
+
+      const workoutRows = (workoutsRes.data ?? []) as RankingWorkout[];
+      const progressRows = (progressRes.data ?? []) as RankingProgress[];
+      setRecentWorkouts(workoutRows.slice(0, 15));
+      setRecentProgress(progressRows.slice(0, 15));
+      const daySet = new Set<string>();
+
+      progressRows.forEach((entry) => {
+        const key = String(entry.recorded_at).slice(0, 10);
+        if (key >= fourteenDayStartKey) daySet.add(key);
+      });
+      workoutRows.forEach((entry) => {
+        const key = String(entry.performed_at).slice(0, 10);
+        if (key >= fourteenDayStartKey) daySet.add(key);
+      });
+
+      const liveActivityDays = daySet.size;
+      const liveStreakDays = calculateStreak(daySet);
+      setActivityDays(liveActivityDays);
+      setStreakDays(liveStreakDays);
+
+      if (lbRes.error) {
         setError("Leaderboard is not ready yet. Add scores to see rankings.");
         setLeaderboard([]);
       } else {
-        const normalized = ((rows ?? []) as Array<{
-          profiles?: { name: string | null; email: string | null; avatar_url: string | null }[] | null;
-        }>).map((row) => ({
-          ...row,
-          profiles: Array.isArray(row.profiles) ? row.profiles[0] ?? null : row.profiles,
-        })) as LeaderboardRow[];
+        const normalized: LeaderboardRow[] = ((lbRes.data ?? []) as RawLeaderboardRow[]).map(
+          (row) => ({
+            ...row,
+            profiles: Array.isArray(row.profiles)
+              ? row.profiles[0] ?? null
+              : row.profiles,
+          }),
+        );
+
+        if (resolvedProfileId) {
+          const liveScores = buildLiveScores(
+            workoutRows,
+            progressRows,
+            liveActivityDays,
+            liveStreakDays,
+          );
+
+          const existingIndex = normalized.findIndex(
+            (entry) => entry.user_id === resolvedProfileId,
+          );
+          const existing = existingIndex >= 0 ? normalized[existingIndex] : null;
+
+          const myLiveRow: LeaderboardRow = {
+            id: existing?.id ?? `local-${resolvedProfileId}`,
+            user_id: resolvedProfileId,
+            total_score: liveScores.totalScore,
+            strength_score: liveScores.strengthScore,
+            stamina_score: liveScores.staminaScore,
+            consistency_score: liveScores.consistencyScore,
+            improvement_score: liveScores.improvementScore,
+            tier: liveScores.tier,
+            position: existing?.position ?? null,
+            updated_at: new Date().toISOString(),
+            profiles: existing?.profiles ?? {
+              name:
+                user.user_metadata?.name ??
+                user.user_metadata?.full_name ??
+                user.email ??
+                "You",
+              email: user.email ?? null,
+              avatar_url: user.user_metadata?.avatar_url ?? null,
+            },
+          };
+
+          if (existingIndex >= 0) {
+            normalized[existingIndex] = myLiveRow;
+          } else {
+            normalized.unshift(myLiveRow);
+          }
+        }
+
         setLeaderboard(normalized);
       }
-
-      setProfileId(profile?.id ?? null);
       setLoading(false);
     };
 
     load();
   }, [user]);
-
-  useEffect(() => {
-    if (!profileId) return;
-    const checkEligibility = async () => {
-      const start = new Date();
-      start.setDate(start.getDate() - 14);
-      const { data } = await supabase
-        .from("progress_entries")
-        .select("recorded_at")
-        .eq("user_id", profileId)
-        .eq("metric", "body_weight")
-        .gte("recorded_at", start.toISOString());
-
-      const daySet = new Set(
-        (data ?? []).map((entry) => entry.recorded_at.slice(0, 10)),
-      );
-      setEligibleDays(daySet.size);
-      setIsEligible(daySet.size >= 14);
-    };
-
-    checkEligibility();
-  }, [profileId]);
-
-  useEffect(() => {
-    if (!profileId) return;
-    const checkEligibility = async () => {
-      const start = new Date();
-      start.setDate(start.getDate() - 14);
-      const { data } = await supabase
-        .from("progress_entries")
-        .select("recorded_at")
-        .eq("user_id", profileId)
-        .eq("metric", "body_weight")
-        .gte("recorded_at", start.toISOString());
-
-      const daySet = new Set(
-        (data ?? []).map((entry) => entry.recorded_at.slice(0, 10)),
-      );
-      setEligibleDays(daySet.size);
-      setIsEligible(daySet.size >= 14);
-    };
-
-    checkEligibility();
-  }, [profileId]);
 
   const filtered = useMemo(() => {
     const term = search.trim().toLowerCase();
@@ -168,14 +396,13 @@ export default function RankingPage() {
       const bValue = Number(b[activeMetric] ?? 0);
       return bValue - aValue;
     });
+
     if (!term) return sorted;
+
     return sorted.filter((entry) => {
       const name = entry.profiles?.name ?? "";
       const email = entry.profiles?.email ?? "";
-      return (
-        name.toLowerCase().includes(term) ||
-        email.toLowerCase().includes(term)
-      );
+      return name.toLowerCase().includes(term) || email.toLowerCase().includes(term);
     });
   }, [leaderboard, search, activeMetric]);
 
@@ -185,6 +412,69 @@ export default function RankingPage() {
   }, [leaderboard, profileId]);
 
   const topThree = filtered.slice(0, 3);
+  const fairPlayReady = activityDays >= 14;
+  const correctionRecordOptions = useMemo(() => {
+    if (correctionTable === "progress_entries") {
+      return recentProgress.map((entry) => ({
+        id: entry.id,
+        label: `${entry.metric} - ${String(entry.recorded_at).slice(0, 10)}`,
+      }));
+    }
+    return recentWorkouts.map((entry) => ({
+      id: entry.id,
+      label: `${entry.type ?? "Workout"} - ${String(entry.performed_at).slice(0, 10)}`,
+    }));
+  }, [correctionTable, recentProgress, recentWorkouts]);
+
+  useEffect(() => {
+    if (correctionRecordOptions.length === 0) {
+      setCorrectionRecordId("");
+      return;
+    }
+    const exists = correctionRecordOptions.some(
+      (option) => option.id === correctionRecordId,
+    );
+    if (!exists) {
+      setCorrectionRecordId(correctionRecordOptions[0].id);
+    }
+  }, [correctionRecordId, correctionRecordOptions]);
+
+  const handleCorrectionRequest = async () => {
+    setCorrectionStatus(null);
+    setCorrectionError(null);
+
+    if (!profileId) {
+      setCorrectionError("Profile not loaded. Re-login and try again.");
+      return;
+    }
+    if (!correctionRecordId) {
+      setCorrectionError("Select a record to request correction.");
+      return;
+    }
+    if (correctionReason.trim().length < 15) {
+      setCorrectionError("Reason should be at least 15 characters.");
+      return;
+    }
+
+    setCorrectionSubmitting(true);
+    const { error: requestError } = await supabase
+      .from("ranking_edit_requests")
+      .insert({
+        user_id: profileId,
+        target_table: correctionTable,
+        target_record_id: correctionRecordId,
+        reason: correctionReason.trim(),
+      });
+
+    setCorrectionSubmitting(false);
+    if (requestError) {
+      setCorrectionError(`Request failed: ${requestError.message}`);
+      return;
+    }
+
+    setCorrectionStatus("Correction request submitted for admin verification.");
+    setCorrectionReason("");
+  };
 
   return (
     <div className="space-y-8 text-day-text-primary dark:text-night-text-primary">
@@ -197,7 +487,7 @@ export default function RankingPage() {
         <div>
           <h1 className="text-2xl font-semibold">Smart Ranking</h1>
           <p className="mt-1 text-sm text-day-text-secondary dark:text-night-text-secondary">
-            Live leaderboard powered by your training performance.
+            Daily ranking updates. Fair-play lock after 14 active days.
           </p>
         </div>
         <div className="relative w-full max-w-sm">
@@ -251,113 +541,104 @@ export default function RankingPage() {
       >
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <div className="font-semibold">Ranking Eligibility</div>
+            <div className="flex items-center gap-2 font-semibold">
+              <ShieldCheck className="h-4 w-4 text-day-accent-primary dark:text-night-accent" />
+              Fair-Play Window
+            </div>
             <div className="text-day-text-secondary dark:text-night-text-secondary">
-              Log daily body weight for 14 days to join the public leaderboard.
+              Rankings refresh daily. After 14 active days, score corrections require verification.
             </div>
           </div>
           <span
             className={`rounded-full px-3 py-1 text-xs font-semibold ${
-              isEligible
-                ? "bg-emerald-100 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-300"
+              fairPlayReady
+                ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"
                 : "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300"
             }`}
           >
-            {eligibleDays}/14 days
+            {activityDays}/14 active days
           </span>
         </div>
         <div className="mt-3 h-2 w-full rounded-full bg-day-border dark:bg-night-border">
           <div
             className="h-2 rounded-full bg-linear-to-r from-day-accent-primary to-day-accent-secondary dark:from-night-accent dark:to-red-600"
-            style={{ width: `${Math.min((eligibleDays / 14) * 100, 100)}%` }}
+            style={{ width: `${Math.min((activityDays / 14) * 100, 100)}%` }}
           />
+        </div>
+        <div className="mt-3 text-xs text-day-text-secondary dark:text-night-text-secondary">
+          Current streak: <span className="font-semibold">{streakDays} days</span>
         </div>
       </motion.section>
 
-      {!isEligible ? (
-        <motion.section
-          initial={{ opacity: 0, y: 12 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.4, delay: 0.1 }}
-          className="rounded-2xl border border-day-border bg-day-card p-6 text-sm text-day-text-secondary shadow-card dark:border-night-border dark:bg-night-card dark:text-night-text-secondary dark:shadow-card-dark"
-        >
-          Keep logging daily weight for 14 days to unlock the leaderboard.
-          You can still view your personal stats below.
-        </motion.section>
-      ) : null}
-
-      {isEligible ? (
-        <motion.section
-          initial={{ opacity: 0, y: 16 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.4, delay: 0.1 }}
-          className="grid gap-4 md:grid-cols-3"
-        >
-          {topThree.map((entry, index) => {
-            const tierMeta = getTierMeta(entry.tier);
-            const TierIcon = tierMeta.icon;
-            const displayName =
-              entry.profiles?.name ?? entry.profiles?.email ?? "Athlete";
-            const highlight =
-              index === 0
-                ? "from-amber-400/20 to-amber-500/10"
-                : index === 1
-                  ? "from-slate-200/40 to-slate-100/10"
-                  : "from-orange-400/20 to-orange-500/10";
-            return (
+      <motion.section
+        initial={{ opacity: 0, y: 16 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.4, delay: 0.1 }}
+        className="grid gap-4 md:grid-cols-3"
+      >
+        {topThree.map((entry, index) => {
+          const tierMeta = getTierMeta(entry.tier);
+          const TierIcon = tierMeta.icon;
+          const displayName = entry.profiles?.name ?? entry.profiles?.email ?? "Athlete";
+          const highlight =
+            index === 0
+              ? "from-amber-400/20 to-amber-500/10"
+              : index === 1
+                ? "from-slate-200/40 to-slate-100/10"
+                : "from-orange-400/20 to-orange-500/10";
+          return (
+            <div
+              key={entry.id}
+              className={`rounded-2xl border border-day-border bg-day-card p-5 shadow-card dark:border-night-border dark:bg-night-card dark:shadow-card-dark ${
+                index === 0
+                  ? "ring-1 ring-amber-400/60"
+                  : index === 1
+                    ? "ring-1 ring-slate-300/60"
+                    : "ring-1 ring-orange-400/40"
+              }`}
+            >
               <div
-                key={entry.id}
-                className={`rounded-2xl border border-day-border bg-day-card p-5 shadow-card dark:border-night-border dark:bg-night-card dark:shadow-card-dark ${
-                  index === 0
-                    ? "ring-1 ring-amber-400/60"
-                    : index === 1
-                      ? "ring-1 ring-slate-300/60"
-                      : "ring-1 ring-orange-400/40"
-                }`}
+                className={`mb-4 flex items-center justify-between rounded-xl bg-linear-to-r ${highlight} px-3 py-2`}
               >
-                <div
-                  className={`mb-4 flex items-center justify-between rounded-xl bg-linear-to-r ${highlight} px-3 py-2`}
-                >
-                  <div className="flex items-center gap-2 text-sm font-semibold">
-                    <Crown className="h-4 w-4 text-amber-500" />
-                    #{index + 1} Spot
-                  </div>
-                  <span
-                    className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold ${tierMeta.tone} ${tierMeta.text}`}
-                  >
-                    <TierIcon className="h-3 w-3" />
-                    {entry.tier ?? "Bronze"}
-                  </span>
+                <div className="flex items-center gap-2 text-sm font-semibold">
+                  <Crown className="h-4 w-4 text-amber-500" />
+                  #{index + 1} Spot
                 </div>
-                <div className="flex items-center gap-3">
-                  <div className="flex h-12 w-12 items-center justify-center rounded-full bg-day-hover text-sm font-semibold text-day-text-secondary dark:bg-night-hover dark:text-night-text-secondary">
-                    {entry.profiles?.avatar_url ? (
-                      <img
-                        src={entry.profiles.avatar_url}
-                        alt={displayName}
-                        className="h-full w-full rounded-full object-cover"
-                      />
-                    ) : (
-                      displayName[0]
-                    )}
-                  </div>
-                  <div>
-                    <div className="text-sm font-semibold">{displayName}</div>
-                    <div className="text-xs text-day-text-secondary dark:text-night-text-secondary">
-                      Total score {formatScore(entry.total_score)}
-                    </div>
+                <span
+                  className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold ${tierMeta.tone} ${tierMeta.text}`}
+                >
+                  <TierIcon className="h-3 w-3" />
+                  {entry.tier ?? "Bronze"}
+                </span>
+              </div>
+              <div className="flex items-center gap-3">
+                <div className="flex h-12 w-12 items-center justify-center rounded-full bg-day-hover text-sm font-semibold text-day-text-secondary dark:bg-night-hover dark:text-night-text-secondary">
+                  {entry.profiles?.avatar_url ? (
+                    <img
+                      src={entry.profiles.avatar_url}
+                      alt={displayName}
+                      className="h-full w-full rounded-full object-cover"
+                    />
+                  ) : (
+                    displayName[0]
+                  )}
+                </div>
+                <div>
+                  <div className="text-sm font-semibold">{displayName}</div>
+                  <div className="text-xs text-day-text-secondary dark:text-night-text-secondary">
+                    Total score {formatScore(entry.total_score)}
                   </div>
                 </div>
               </div>
-            );
-          })}
-          {topThree.length === 0 && !loading ? (
-            <div className="col-span-full rounded-2xl border border-day-border bg-day-card p-6 text-sm text-day-text-secondary dark:border-night-border dark:bg-night-card dark:text-night-text-secondary">
-              No rankings yet. Add workouts and progress entries to populate the leaderboard.
             </div>
-          ) : null}
-        </motion.section>
-      ) : null}
+          );
+        })}
+        {topThree.length === 0 && !loading ? (
+          <div className="col-span-full rounded-2xl border border-day-border bg-day-card p-6 text-sm text-day-text-secondary dark:border-night-border dark:bg-night-card dark:text-night-text-secondary">
+            No rankings yet. Add workouts and progress entries to populate the leaderboard.
+          </div>
+        ) : null}
+      </motion.section>
 
       <motion.section
         initial={{ opacity: 0, y: 16 }}
@@ -365,7 +646,6 @@ export default function RankingPage() {
         transition={{ duration: 0.4, delay: 0.15 }}
         className="grid gap-6 lg:grid-cols-[1.5fr_1fr]"
       >
-        {isEligible ? (
         <div className="rounded-2xl border border-day-border bg-day-card shadow-card dark:border-night-border dark:bg-night-card dark:shadow-card-dark">
           <div className="flex items-center justify-between border-b border-day-border px-5 py-4 dark:border-night-border">
             <div className="flex items-center gap-2 text-sm font-semibold">
@@ -379,7 +659,7 @@ export default function RankingPage() {
           <div className="divide-y divide-day-border dark:divide-night-border">
             {loading ? (
               <div className="p-6 text-sm text-day-text-secondary dark:text-night-text-secondary">
-                Loading leaderboard…
+                Loading leaderboard...
               </div>
             ) : filtered.length === 0 ? (
               <div className="p-6 text-sm text-day-text-secondary dark:text-night-text-secondary">
@@ -389,9 +669,8 @@ export default function RankingPage() {
               filtered.map((entry, index) => {
                 const tierMeta = getTierMeta(entry.tier);
                 const TierIcon = tierMeta.icon;
-                const displayName =
-                  entry.profiles?.name ?? entry.profiles?.email ?? "Athlete";
-                const isMe = profileId && entry.user_id === profileId;
+                const displayName = entry.profiles?.name ?? entry.profiles?.email ?? "Athlete";
+                const isMe = !!profileId && entry.user_id === profileId;
                 return (
                   <div
                     key={entry.id}
@@ -434,10 +713,11 @@ export default function RankingPage() {
                       <div className="text-sm font-semibold text-day-text-primary dark:text-night-text-primary">
                         {formatScore(entry[activeMetric])}
                       </div>
-                      {sortOptions.find((opt) => opt.key === activeMetric)
-                        ?.label ?? "Score"}
+                      {sortOptions.find((opt) => opt.key === activeMetric)?.label ?? "Score"}
                     </div>
-                    <div className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-semibold ${tierMeta.tone} ${tierMeta.text}`}>
+                    <div
+                      className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-semibold ${tierMeta.tone} ${tierMeta.text}`}
+                    >
                       <TierIcon className="h-3 w-3" />
                       {entry.tier ?? "Bronze"}
                     </div>
@@ -447,12 +727,6 @@ export default function RankingPage() {
             )}
           </div>
         </div>
-        ) : (
-          <div className="rounded-2xl border border-day-border bg-day-card p-6 text-sm text-day-text-secondary shadow-card dark:border-night-border dark:bg-night-card dark:text-night-text-secondary dark:shadow-card-dark">
-            The leaderboard unlocks after 14 days of body-weight tracking. Keep
-            logging daily to join the rankings.
-          </div>
-        )}
 
         <div className="space-y-4">
           <div className="rounded-2xl border border-day-border bg-day-card p-5 shadow-card dark:border-night-border dark:bg-night-card dark:shadow-card-dark">
@@ -463,44 +737,32 @@ export default function RankingPage() {
             {myEntry ? (
               <div className="mt-4 space-y-3 text-sm">
                 <div className="flex items-center justify-between">
-                  <span className="text-day-text-secondary dark:text-night-text-secondary">
-                    Overall Score
-                  </span>
-                  <span className="font-semibold">
-                    {formatScore(myEntry.total_score)}
-                  </span>
+                  <span className="text-day-text-secondary dark:text-night-text-secondary">Overall Score</span>
+                  <span className="font-semibold">{formatScore(myEntry.total_score)}</span>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span className="text-day-text-secondary dark:text-night-text-secondary">
-                    Strength
-                  </span>
-                  <span className="font-semibold">
-                    {formatScore(myEntry.strength_score)}
-                  </span>
+                  <span className="text-day-text-secondary dark:text-night-text-secondary">Strength</span>
+                  <span className="font-semibold">{formatScore(myEntry.strength_score)}</span>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span className="text-day-text-secondary dark:text-night-text-secondary">
-                    Stamina
-                  </span>
-                  <span className="font-semibold">
-                    {formatScore(myEntry.stamina_score)}
-                  </span>
+                  <span className="text-day-text-secondary dark:text-night-text-secondary">Stamina</span>
+                  <span className="font-semibold">{formatScore(myEntry.stamina_score)}</span>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span className="text-day-text-secondary dark:text-night-text-secondary">
-                    Consistency
-                  </span>
-                  <span className="font-semibold">
-                    {formatScore(myEntry.consistency_score)}
-                  </span>
+                  <span className="text-day-text-secondary dark:text-night-text-secondary">Consistency</span>
+                  <span className="font-semibold">{formatScore(myEntry.consistency_score)}</span>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span className="text-day-text-secondary dark:text-night-text-secondary">
-                    Improvement
-                  </span>
-                  <span className="font-semibold">
-                    {formatScore(myEntry.improvement_score)}
-                  </span>
+                  <span className="text-day-text-secondary dark:text-night-text-secondary">Improvement</span>
+                  <span className="font-semibold">{formatScore(myEntry.improvement_score)}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-day-text-secondary dark:text-night-text-secondary">Active Days (14d)</span>
+                  <span className="font-semibold">{activityDays}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-day-text-secondary dark:text-night-text-secondary">Current Streak</span>
+                  <span className="font-semibold">{streakDays} days</span>
                 </div>
               </div>
             ) : (
@@ -516,10 +778,98 @@ export default function RankingPage() {
               Ranking Insights
             </div>
             <ul className="mt-4 space-y-3 text-sm text-day-text-secondary dark:text-night-text-secondary">
-              <li>Scores update every time you log a workout or progress entry.</li>
-              <li>Consistency weighs streaks and weekly activity.</li>
-              <li>Improvement score rewards big progress jumps.</li>
+              <li>Global rank updates daily using the latest logged data.</li>
+              <li>Consistency score uses activity days + streak quality.</li>
+              <li>After 14 active days, corrections should go through verification review.</li>
             </ul>
+          </div>
+
+          <div className="rounded-2xl border border-day-border bg-day-card p-5 shadow-card dark:border-night-border dark:bg-night-card dark:shadow-card-dark">
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-sm font-semibold">Request Score Correction</div>
+              <span className="rounded-full bg-day-hover px-2 py-0.5 text-[11px] font-semibold text-day-text-secondary dark:bg-night-hover dark:text-night-text-secondary">
+                Verification
+              </span>
+            </div>
+            <p className="mt-2 text-xs text-day-text-secondary dark:text-night-text-secondary">
+              Use this when a ranking-impacting entry needs correction. Admin review required.
+            </p>
+
+            <div className="mt-4 space-y-3 text-sm">
+              <label className="block">
+                <span className="mb-1 block text-xs text-day-text-secondary dark:text-night-text-secondary">
+                  Data type
+                </span>
+                <select
+                  value={correctionTable}
+                  onChange={(event) =>
+                    setCorrectionTable(event.target.value as RankingCorrectionTable)
+                  }
+                  className="w-full rounded-lg border border-day-border bg-day-card px-3 py-2 text-day-text-primary focus:border-transparent focus:outline-none focus:ring-2 focus:ring-day-accent-primary dark:border-night-border dark:bg-night-card dark:text-night-text-primary dark:focus:ring-night-accent"
+                >
+                  <option value="progress_entries">Progress Entries</option>
+                  <option value="workouts">Workouts</option>
+                </select>
+              </label>
+
+              <label className="block">
+                <span className="mb-1 block text-xs text-day-text-secondary dark:text-night-text-secondary">
+                  Record
+                </span>
+                <select
+                  value={correctionRecordId}
+                  onChange={(event) => setCorrectionRecordId(event.target.value)}
+                  className="w-full rounded-lg border border-day-border bg-day-card px-3 py-2 text-day-text-primary focus:border-transparent focus:outline-none focus:ring-2 focus:ring-day-accent-primary dark:border-night-border dark:bg-night-card dark:text-night-text-primary dark:focus:ring-night-accent"
+                >
+                  {correctionRecordOptions.length === 0 ? (
+                    <option value="">No records available</option>
+                  ) : (
+                    correctionRecordOptions.map((option) => (
+                      <option key={option.id} value={option.id}>
+                        {option.label}
+                      </option>
+                    ))
+                  )}
+                </select>
+              </label>
+
+              <label className="block">
+                <span className="mb-1 block text-xs text-day-text-secondary dark:text-night-text-secondary">
+                  Reason
+                </span>
+                <textarea
+                  value={correctionReason}
+                  onChange={(event) => setCorrectionReason(event.target.value)}
+                  placeholder="Explain what is wrong and what should be corrected."
+                  rows={3}
+                  className="w-full rounded-lg border border-day-border bg-day-card px-3 py-2 text-day-text-primary placeholder-day-text-secondary focus:border-transparent focus:outline-none focus:ring-2 focus:ring-day-accent-primary dark:border-night-border dark:bg-night-card dark:text-night-text-primary dark:placeholder-night-text-secondary dark:focus:ring-night-accent"
+                />
+              </label>
+            </div>
+
+            {correctionError ? (
+              <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-900/50 dark:bg-red-900/20 dark:text-red-200">
+                {correctionError}
+              </div>
+            ) : null}
+            {correctionStatus ? (
+              <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700 dark:border-emerald-900/50 dark:bg-emerald-900/20 dark:text-emerald-300">
+                {correctionStatus}
+              </div>
+            ) : null}
+
+            <button
+              type="button"
+              onClick={handleCorrectionRequest}
+              disabled={
+                correctionSubmitting ||
+                !profileId ||
+                correctionRecordOptions.length === 0
+              }
+              className="mt-4 w-full rounded-lg bg-day-accent-primary px-4 py-2 text-sm font-semibold text-white transition hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-night-accent"
+            >
+              {correctionSubmitting ? "Submitting..." : "Submit Correction Request"}
+            </button>
           </div>
         </div>
       </motion.section>

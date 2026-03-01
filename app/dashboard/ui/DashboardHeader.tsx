@@ -46,14 +46,30 @@ export default function DashboardHeader() {
   useEffect(() => {
     if (!user) return;
     const loadProfile = async () => {
-      const { data: profile } = await supabase
+      const byAuthUser = await supabase
         .from("profiles")
         .select("name,email,avatar_url")
         .eq("auth_user_id", user.id)
         .maybeSingle();
+
+      let profile = byAuthUser.data;
+      if (!profile && user.email) {
+        const byEmail = await supabase
+          .from("profiles")
+          .select("name,email,avatar_url")
+          .ilike("email", user.email)
+          .maybeSingle();
+        profile = byEmail.data;
+      }
+
       setProfileName(profile?.name ?? null);
       setProfileEmail(profile?.email ?? user.email ?? null);
-      setAvatarUrl(profile?.avatar_url ?? user.user_metadata?.avatar_url ?? null);
+      setAvatarUrl(
+        profile?.avatar_url ??
+          (user.user_metadata?.avatar_url as string | undefined) ??
+          (user.user_metadata?.picture as string | undefined) ??
+          null,
+      );
       setProfileLevel((user.user_metadata?.level as string | undefined) ?? null);
       setProfilePoints((user.user_metadata?.points as number | undefined) ?? null);
     };

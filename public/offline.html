@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BioLift - Offline</title>
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: "Poppins", system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+        background: radial-gradient(circle at 20% 20%, #1a0606, #000000 65%);
+        color: #f3f4f6;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+      }
+      .card {
+        width: min(520px, 100%);
+        border: 1px solid #2b2b2b;
+        border-radius: 18px;
+        background: rgba(10, 10, 10, 0.92);
+        padding: 28px;
+        box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+      }
+      .title {
+        margin: 0 0 8px;
+        font-size: 1.45rem;
+        font-weight: 700;
+      }
+      .subtitle {
+        margin: 0;
+        color: #b8b8b8;
+        line-height: 1.6;
+      }
+      .btn {
+        margin-top: 20px;
+        border: 0;
+        background: linear-gradient(90deg, #ff2c2c, #d01717);
+        color: #fff;
+        font-weight: 600;
+        border-radius: 10px;
+        padding: 12px 16px;
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="card">
+      <h1 class="title">You are offline</h1>
+      <p class="subtitle">
+        BioLift couldn't reach the network. Please reconnect and retry.
+      </p>
+      <button class="btn" type="button" onclick="window.location.reload()">
+        Retry
+      </button>
+    </main>
+  </body>
+</html>

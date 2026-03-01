@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
-import { createSupabaseAdminClient, createSupabaseServerClient } from "@/lib/supabase/server";
-
-const ADMIN_EMAILS = new Set(["windows11arm64@gmail.com"]);
+import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { syncUserRoleAndProfile } from "@/lib/auth/syncUserRole";
 
 export async function GET(request: Request) {
   const { searchParams, origin } = new URL(request.url);
@@ -18,29 +17,11 @@ export async function GET(request: Request) {
     return NextResponse.redirect(`${origin}/signin?error=oauth_failed`);
   }
 
-  const user = data.session.user;
-  const adminClient = createSupabaseAdminClient();
-  const role = ADMIN_EMAILS.has(user.email ?? "") ? "admin" : "user";
-
-  await adminClient.auth.admin.updateUserById(user.id, {
-    user_metadata: {
-      ...(user.user_metadata ?? {}),
-      role,
-    },
-  });
-
-  await adminClient.from("profiles").upsert(
-    {
-      auth_user_id: user.id,
-      email: user.email ?? "",
-      name: user.user_metadata?.name ?? user.user_metadata?.full_name ?? null,
-      avatar_url: user.user_metadata?.avatar_url ?? null,
-      role,
-      updated_at: new Date().toISOString(),
-    },
-    { onConflict: "auth_user_id" },
-  );
-
-  const destination = role === "admin" ? "/admin/dashboard" : next;
-  return NextResponse.redirect(`${origin}${destination}`);
+  try {
+    const role = await syncUserRoleAndProfile(data.session.user);
+    const destination = role === "admin" ? "/admin/dashboard" : next;
+    return NextResponse.redirect(`${origin}${destination}`);
+  } catch {
+    return NextResponse.redirect(`${origin}/signin?error=oauth_sync_failed`);
+  }
 }
