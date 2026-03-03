@@ -109,7 +109,7 @@ export default function DashboardHeader() {
     .toUpperCase();
   const navItems = [
     { href: "/dashboard", label: "Dashboard", icon: LayoutGrid },
-    { href: "/dashboard/workout", label: "Workout", icon: Dumbbell },
+    { href: "/dashboard/workout-planner", label: "Workout", icon: Dumbbell },
     { href: "/dashboard/ranking", label: "Ranking", icon: Trophy },
     { href: "/dashboard/progress", label: "Progress", icon: LineChart },
     { href: "/dashboard/diet", label: "Diet", icon: Apple },

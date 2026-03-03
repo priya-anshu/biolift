@@ -13,6 +13,7 @@ import {
   Timer,
   TrendingUp,
   Zap,
+  CalendarDays,
 } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
@@ -55,12 +56,27 @@ type Goal = {
   unit: string | null;
 };
 
+type MotivationResponse = {
+  date: string;
+  language: "en" | "hi" | "bi";
+  message: string;
+  todayPlan: {
+    id: string;
+    name: string;
+    exercises: Array<{ id: string; exercise_name: string }>;
+  } | null;
+  completionPercentage: number;
+  currentStreak: number;
+  totalCompletedWorkouts: number;
+};
+
 export default function DashboardPage() {
   const { user } = useAuth();
   const [profileId, setProfileId] = useState<string | null>(null);
   const [workouts, setWorkouts] = useState<Workout[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [heartRateAvg, setHeartRateAvg] = useState<number | null>(null);
+  const [motivation, setMotivation] = useState<MotivationResponse | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -115,6 +131,18 @@ export default function DashboardPage() {
       } else {
         setHeartRateAvg(null);
       }
+
+      try {
+        const motivationRes = await fetch("/api/dashboard/motivation", {
+          cache: "no-store",
+        });
+        const motivationPayload = (await motivationRes.json()) as MotivationResponse & {
+          error?: string;
+        };
+        if (motivationRes.ok) {
+          setMotivation(motivationPayload);
+        }
+      } catch {}
 
       setLoading(false);
     };
@@ -183,6 +211,57 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-8 text-day-text-primary dark:text-night-text-primary">
+        {motivation ? (
+          <motion.section
+            variants={sectionVariants}
+            initial="hidden"
+            animate="visible"
+            transition={{ duration: 0.45 }}
+            className="rounded-2xl border border-day-border bg-day-card p-6 shadow-card dark:border-night-border dark:bg-night-card dark:shadow-card-dark"
+          >
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-day-text-secondary dark:text-night-text-secondary">
+                  Daily Motivation
+                </p>
+                <h2 className="mt-2 text-xl font-semibold">{motivation.message}</h2>
+                <p className="mt-2 text-sm text-day-text-secondary dark:text-night-text-secondary">
+                  Today: {motivation.todayPlan?.name ?? "No active plan"} •{" "}
+                  {motivation.todayPlan?.exercises.length ?? 0} exercises
+                </p>
+              </div>
+              <Link
+                href="/dashboard/workout-planner"
+                className="inline-flex items-center gap-2 rounded-lg border border-day-border px-3 py-2 text-sm font-semibold text-day-text-secondary hover:bg-day-hover dark:border-night-border dark:text-night-text-secondary dark:hover:bg-night-hover"
+              >
+                <CalendarDays className="h-4 w-4" />
+                Open Planner
+              </Link>
+            </div>
+            <div className="mt-4 grid gap-3 md:grid-cols-3">
+              <div className="rounded-xl bg-day-hover px-3 py-2 dark:bg-night-hover">
+                <div className="text-xs text-day-text-secondary dark:text-night-text-secondary">
+                  Completion
+                </div>
+                <div className="text-lg font-semibold">{motivation.completionPercentage}%</div>
+              </div>
+              <div className="rounded-xl bg-day-hover px-3 py-2 dark:bg-night-hover">
+                <div className="text-xs text-day-text-secondary dark:text-night-text-secondary">
+                  Current Streak
+                </div>
+                <div className="text-lg font-semibold">{motivation.currentStreak} days</div>
+              </div>
+              <div className="rounded-xl bg-day-hover px-3 py-2 dark:bg-night-hover">
+                <div className="text-xs text-day-text-secondary dark:text-night-text-secondary">
+                  Total Completed
+                </div>
+                <div className="text-lg font-semibold">
+                  {motivation.totalCompletedWorkouts}
+                </div>
+              </div>
+            </div>
+          </motion.section>
+        ) : null}
         <motion.section
           variants={sectionVariants}
           initial="hidden"
@@ -257,7 +336,7 @@ export default function DashboardPage() {
               Begin your next training session with AI-powered guidance
             </p>
             <Link
-              href="/dashboard/workout-selection"
+              href="/dashboard/workout-planner"
               className="mt-6 inline-flex rounded-lg border border-white/40 px-4 py-2 text-sm font-semibold"
             >
               Start Now
@@ -278,7 +357,7 @@ export default function DashboardPage() {
               Generate a personalized workout plan based on your goals
             </p>
             <Link
-              href="/dashboard/create-plan"
+              href="/dashboard/workout-planner"
               className="mt-5 inline-flex rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white dark:bg-night-accent"
             >
               Create Plan

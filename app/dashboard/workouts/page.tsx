@@ -129,7 +129,7 @@ export default function WorkoutsPage() {
             Track your fitness journey and progress
           </p>
         </div>
-        <Link href="/dashboard/workout-selection">
+        <Link href="/dashboard/workout-planner">
           <Button variant="primary">
             <Play className="mr-2 h-4 w-4" />
             Start Workout
@@ -278,7 +278,7 @@ export default function WorkoutsPage() {
                 <Badge variant="ghost" size="sm" className="capitalize">
                   {workout.type ?? "workout"}
                 </Badge>
-                <Link href="/dashboard/workout-selection">
+                <Link href="/dashboard/workout-planner">
                   <Button variant="ghost" size="sm">
                     <Play className="mr-1 h-4 w-4" />
                     Repeat
@@ -308,7 +308,7 @@ export default function WorkoutsPage() {
               ? "Try adjusting your search or filters"
               : "Start your fitness journey with your first workout"}
           </p>
-          <Link href="/dashboard/workout-selection">
+          <Link href="/dashboard/workout-planner">
             <Button variant="primary">
               <Play className="mr-2 h-4 w-4" />
               Start Your First Workout
@@ -319,4 +319,3 @@ export default function WorkoutsPage() {
     </div>
   );
 }
-
