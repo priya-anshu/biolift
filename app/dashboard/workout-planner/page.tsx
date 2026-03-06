@@ -36,6 +36,8 @@ type ManualExercise = {
   notes: string;
   difficultyLevel: "beginner" | "intermediate" | "advanced";
   equipmentRequired: string;
+  imageInput: string;
+  gifInput: string;
   cloudinaryImageId: string;
   cloudinaryGifId: string;
 };
@@ -66,6 +68,8 @@ const defaultManualExercise = (): ManualExercise => ({
   notes: "",
   difficultyLevel: "intermediate",
   equipmentRequired: "",
+  imageInput: "",
+  gifInput: "",
   cloudinaryImageId: "",
   cloudinaryGifId: "",
 });
@@ -180,6 +184,43 @@ function buildMonthGrid(date: Date) {
 
 function normalizeGoal(goal: string) {
   return goal.replaceAll("_", " ");
+}
+
+function extractCloudinaryAssetId(rawValue: string) {
+  const value = rawValue.trim();
+  if (!value) return "";
+
+  if (!/^https?:\/\//i.test(value)) {
+    return value.replace(/\.(png|jpe?g|webp|gif|avif)$/i, "");
+  }
+
+  try {
+    const url = new URL(value);
+    if (!url.hostname.includes("cloudinary.com")) return "";
+
+    const segments = url.pathname.split("/").filter(Boolean);
+    const uploadIndex = segments.findIndex((segment) => segment === "upload");
+    if (uploadIndex === -1) return "";
+
+    let assetSegments = segments.slice(uploadIndex + 1);
+    while (
+      assetSegments.length > 0 &&
+      /^(?:[a-z]+_.*|q_.*|f_.*|w_.*|h_.*|c_.*|g_.*|dpr_.*|ar_.*)$/i.test(
+        assetSegments[0],
+      )
+    ) {
+      assetSegments = assetSegments.slice(1);
+    }
+    if (assetSegments[0]?.match(/^v\d+$/)) {
+      assetSegments = assetSegments.slice(1);
+    }
+    if (assetSegments.length === 0) return "";
+
+    const publicId = decodeURIComponent(assetSegments.join("/"));
+    return publicId.replace(/\.[^/.]+$/, "");
+  } catch {
+    return "";
+  }
 }
 
 export default function WorkoutPlannerPage() {
@@ -434,8 +475,14 @@ export default function WorkoutPlannerPage() {
               .split(",")
               .map((item) => item.trim())
               .filter(Boolean),
-            cloudinaryImageId: exercise.cloudinaryImageId || null,
-            cloudinaryGifId: exercise.cloudinaryGifId || null,
+            cloudinaryImageId:
+              exercise.cloudinaryImageId ||
+              extractCloudinaryAssetId(exercise.imageInput) ||
+              null,
+            cloudinaryGifId:
+              exercise.cloudinaryGifId ||
+              extractCloudinaryAssetId(exercise.gifInput) ||
+              null,
           })),
         }),
       });
@@ -949,153 +996,267 @@ export default function WorkoutPlannerPage() {
                         </div>
 
                         <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
-                          <input
-                            className="input-field"
-                            placeholder="Exercise Name"
-                            value={exercise.exerciseName}
-                            onChange={(event) =>
-                              updateExercise(day.id, exerciseIndex, (current) => ({
-                                ...current,
-                                exerciseName: event.target.value,
-                              }))
-                            }
-                          />
-                          <input
-                            className="input-field"
-                            placeholder="Muscle Group"
-                            value={exercise.muscleGroup}
-                            onChange={(event) =>
-                              updateExercise(day.id, exerciseIndex, (current) => ({
-                                ...current,
-                                muscleGroup: event.target.value,
-                              }))
-                            }
-                          />
-                          <input
-                            className="input-field"
-                            type="number"
-                            min={1}
-                            max={12}
-                            placeholder="Sets"
-                            value={exercise.sets}
-                            onChange={(event) =>
-                              updateExercise(day.id, exerciseIndex, (current) => ({
-                                ...current,
-                                sets: Number(event.target.value),
-                              }))
-                            }
-                          />
-                          <input
-                            className="input-field"
-                            type="number"
-                            min={1}
-                            max={60}
-                            placeholder="Reps Min"
-                            value={exercise.repsMin}
-                            onChange={(event) =>
-                              updateExercise(day.id, exerciseIndex, (current) => ({
-                                ...current,
-                                repsMin: Number(event.target.value),
-                              }))
-                            }
-                          />
-                          <input
-                            className="input-field"
-                            type="number"
-                            min={1}
-                            max={60}
-                            placeholder="Reps Max"
-                            value={exercise.repsMax}
-                            onChange={(event) =>
-                              updateExercise(day.id, exerciseIndex, (current) => ({
-                                ...current,
-                                repsMax: Number(event.target.value),
-                              }))
-                            }
-                          />
-                          <input
-                            className="input-field"
-                            type="number"
-                            min={15}
-                            max={600}
-                            placeholder="Rest Seconds"
-                            value={exercise.restSeconds}
-                            onChange={(event) =>
-                              updateExercise(day.id, exerciseIndex, (current) => ({
-                                ...current,
-                                restSeconds: Number(event.target.value),
-                              }))
-                            }
-                          />
-                          <input
-                            className="input-field"
-                            placeholder="Tempo (e.g. 2-0-2)"
-                            value={exercise.tempo}
-                            onChange={(event) =>
-                              updateExercise(day.id, exerciseIndex, (current) => ({
-                                ...current,
-                                tempo: event.target.value,
-                              }))
-                            }
-                          />
-                          <input
-                            className="input-field"
-                            type="number"
-                            min={1}
-                            max={10}
-                            placeholder="RPE"
-                            value={exercise.rpe}
-                            onChange={(event) =>
-                              updateExercise(day.id, exerciseIndex, (current) => ({
-                                ...current,
-                                rpe: Number(event.target.value),
-                              }))
-                            }
-                          />
-                          <input
-                            className="input-field"
-                            placeholder="Equipment (comma separated)"
-                            value={exercise.equipmentRequired}
-                            onChange={(event) =>
-                              updateExercise(day.id, exerciseIndex, (current) => ({
-                                ...current,
-                                equipmentRequired: event.target.value,
-                              }))
-                            }
-                          />
-                          <input
-                            className="input-field"
-                            placeholder="Cloudinary Image ID"
-                            value={exercise.cloudinaryImageId}
-                            onChange={(event) =>
-                              updateExercise(day.id, exerciseIndex, (current) => ({
-                                ...current,
-                                cloudinaryImageId: event.target.value,
-                              }))
-                            }
-                          />
-                          <input
-                            className="input-field"
-                            placeholder="Cloudinary GIF ID"
-                            value={exercise.cloudinaryGifId}
-                            onChange={(event) =>
-                              updateExercise(day.id, exerciseIndex, (current) => ({
-                                ...current,
-                                cloudinaryGifId: event.target.value,
-                              }))
-                            }
-                          />
-                          <input
-                            className="input-field md:col-span-2 xl:col-span-4"
-                            placeholder="Exercise Notes"
-                            value={exercise.notes}
-                            onChange={(event) =>
-                              updateExercise(day.id, exerciseIndex, (current) => ({
-                                ...current,
-                                notes: event.target.value,
-                              }))
-                            }
-                          />
+                          <label className="space-y-1">
+                            <span className="text-[11px] font-semibold uppercase tracking-wide text-day-text-secondary dark:text-night-text-secondary">
+                              Exercise Name
+                            </span>
+                            <input
+                              className="input-field"
+                              value={exercise.exerciseName}
+                              onChange={(event) =>
+                                updateExercise(day.id, exerciseIndex, (current) => ({
+                                  ...current,
+                                  exerciseName: event.target.value,
+                                }))
+                              }
+                              placeholder="Incline DB Press"
+                            />
+                          </label>
+
+                          <label className="space-y-1">
+                            <span className="text-[11px] font-semibold uppercase tracking-wide text-day-text-secondary dark:text-night-text-secondary">
+                              Muscle Group
+                            </span>
+                            <input
+                              className="input-field"
+                              value={exercise.muscleGroup}
+                              onChange={(event) =>
+                                updateExercise(day.id, exerciseIndex, (current) => ({
+                                  ...current,
+                                  muscleGroup: event.target.value,
+                                }))
+                              }
+                              placeholder="Chest"
+                            />
+                          </label>
+
+                          <label className="space-y-1">
+                            <span className="text-[11px] font-semibold uppercase tracking-wide text-day-text-secondary dark:text-night-text-secondary">
+                              Sets
+                            </span>
+                            <input
+                              className="input-field"
+                              type="number"
+                              min={1}
+                              max={12}
+                              value={exercise.sets}
+                              onChange={(event) =>
+                                updateExercise(day.id, exerciseIndex, (current) => ({
+                                  ...current,
+                                  sets: Number(event.target.value),
+                                }))
+                              }
+                            />
+                          </label>
+
+                          <label className="space-y-1">
+                            <span className="text-[11px] font-semibold uppercase tracking-wide text-day-text-secondary dark:text-night-text-secondary">
+                              Reps (Min)
+                            </span>
+                            <input
+                              className="input-field"
+                              type="number"
+                              min={1}
+                              max={60}
+                              value={exercise.repsMin}
+                              onChange={(event) =>
+                                updateExercise(day.id, exerciseIndex, (current) => ({
+                                  ...current,
+                                  repsMin: Number(event.target.value),
+                                }))
+                              }
+                            />
+                          </label>
+
+                          <label className="space-y-1">
+                            <span className="text-[11px] font-semibold uppercase tracking-wide text-day-text-secondary dark:text-night-text-secondary">
+                              Reps (Max)
+                            </span>
+                            <input
+                              className="input-field"
+                              type="number"
+                              min={1}
+                              max={60}
+                              value={exercise.repsMax}
+                              onChange={(event) =>
+                                updateExercise(day.id, exerciseIndex, (current) => ({
+                                  ...current,
+                                  repsMax: Number(event.target.value),
+                                }))
+                              }
+                            />
+                          </label>
+
+                          <label className="space-y-1">
+                            <span className="text-[11px] font-semibold uppercase tracking-wide text-day-text-secondary dark:text-night-text-secondary">
+                              Rest (seconds)
+                            </span>
+                            <input
+                              className="input-field"
+                              type="number"
+                              min={15}
+                              max={600}
+                              value={exercise.restSeconds}
+                              onChange={(event) =>
+                                updateExercise(day.id, exerciseIndex, (current) => ({
+                                  ...current,
+                                  restSeconds: Number(event.target.value),
+                                }))
+                              }
+                            />
+                          </label>
+
+                          <label className="space-y-1">
+                            <span className="text-[11px] font-semibold uppercase tracking-wide text-day-text-secondary dark:text-night-text-secondary">
+                              Tempo
+                            </span>
+                            <input
+                              className="input-field"
+                              value={exercise.tempo}
+                              onChange={(event) =>
+                                updateExercise(day.id, exerciseIndex, (current) => ({
+                                  ...current,
+                                  tempo: event.target.value,
+                                }))
+                              }
+                              placeholder="2-0-2"
+                            />
+                          </label>
+
+                          <label className="space-y-1">
+                            <span className="text-[11px] font-semibold uppercase tracking-wide text-day-text-secondary dark:text-night-text-secondary">
+                              RPE (1-10)
+                            </span>
+                            <input
+                              className="input-field"
+                              type="number"
+                              min={1}
+                              max={10}
+                              value={exercise.rpe}
+                              onChange={(event) =>
+                                updateExercise(day.id, exerciseIndex, (current) => ({
+                                  ...current,
+                                  rpe: Number(event.target.value),
+                                }))
+                              }
+                            />
+                          </label>
+
+                          <label className="space-y-1">
+                            <span className="text-[11px] font-semibold uppercase tracking-wide text-day-text-secondary dark:text-night-text-secondary">
+                              Difficulty
+                            </span>
+                            <select
+                              className="input-field"
+                              value={exercise.difficultyLevel}
+                              onChange={(event) =>
+                                updateExercise(day.id, exerciseIndex, (current) => ({
+                                  ...current,
+                                  difficultyLevel: event.target.value as
+                                    | "beginner"
+                                    | "intermediate"
+                                    | "advanced",
+                                }))
+                              }
+                            >
+                              <option value="beginner">Beginner</option>
+                              <option value="intermediate">Intermediate</option>
+                              <option value="advanced">Advanced</option>
+                            </select>
+                          </label>
+
+                          <label className="space-y-1 md:col-span-2 xl:col-span-2">
+                            <span className="text-[11px] font-semibold uppercase tracking-wide text-day-text-secondary dark:text-night-text-secondary">
+                              Equipment (comma separated)
+                            </span>
+                            <input
+                              className="input-field"
+                              value={exercise.equipmentRequired}
+                              onChange={(event) =>
+                                updateExercise(day.id, exerciseIndex, (current) => ({
+                                  ...current,
+                                  equipmentRequired: event.target.value,
+                                }))
+                              }
+                              placeholder="Dumbbells, bench"
+                            />
+                          </label>
+
+                          <label className="space-y-1 md:col-span-2 xl:col-span-2">
+                            <span className="text-[11px] font-semibold uppercase tracking-wide text-day-text-secondary dark:text-night-text-secondary">
+                              Exercise Image (Cloudinary URL or ID)
+                            </span>
+                            <input
+                              className="input-field"
+                              value={exercise.imageInput}
+                              onChange={(event) =>
+                                updateExercise(day.id, exerciseIndex, (current) => {
+                                  const nextInput = event.target.value;
+                                  const extracted = extractCloudinaryAssetId(nextInput);
+                                  return {
+                                    ...current,
+                                    imageInput: nextInput,
+                                    cloudinaryImageId: nextInput.trim()
+                                      ? extracted || current.cloudinaryImageId
+                                      : "",
+                                  };
+                                })
+                              }
+                              placeholder="Paste Cloudinary image URL or public ID"
+                            />
+                          </label>
+
+                          <label className="space-y-1 md:col-span-2 xl:col-span-2">
+                            <span className="text-[11px] font-semibold uppercase tracking-wide text-day-text-secondary dark:text-night-text-secondary">
+                              Exercise GIF (Cloudinary URL or ID)
+                            </span>
+                            <input
+                              className="input-field"
+                              value={exercise.gifInput}
+                              onChange={(event) =>
+                                updateExercise(day.id, exerciseIndex, (current) => {
+                                  const nextInput = event.target.value;
+                                  const extracted = extractCloudinaryAssetId(nextInput);
+                                  return {
+                                    ...current,
+                                    gifInput: nextInput,
+                                    cloudinaryGifId: nextInput.trim()
+                                      ? extracted || current.cloudinaryGifId
+                                      : "",
+                                  };
+                                })
+                              }
+                              placeholder="Paste Cloudinary GIF URL or public ID"
+                            />
+                          </label>
+
+                          {(exercise.cloudinaryImageId || exercise.cloudinaryGifId) ? (
+                            <div className="rounded-lg border border-day-border bg-day-hover/70 px-3 py-2 text-[11px] text-day-text-secondary dark:border-night-border dark:bg-night-hover/50 dark:text-night-text-secondary md:col-span-2 xl:col-span-4">
+                              {exercise.cloudinaryImageId ? (
+                                <div>Image ID: {exercise.cloudinaryImageId}</div>
+                              ) : null}
+                              {exercise.cloudinaryGifId ? (
+                                <div>GIF ID: {exercise.cloudinaryGifId}</div>
+                              ) : null}
+                            </div>
+                          ) : null}
+
+                          <label className="space-y-1 md:col-span-2 xl:col-span-4">
+                            <span className="text-[11px] font-semibold uppercase tracking-wide text-day-text-secondary dark:text-night-text-secondary">
+                              Exercise Notes
+                            </span>
+                            <input
+                              className="input-field"
+                              value={exercise.notes}
+                              onChange={(event) =>
+                                updateExercise(day.id, exerciseIndex, (current) => ({
+                                  ...current,
+                                  notes: event.target.value,
+                                }))
+                              }
+                              placeholder="Optional form cues, tempo notes, or constraints"
+                            />
+                          </label>
                         </div>
                       </div>
                     ))}
@@ -1172,53 +1333,48 @@ export default function WorkoutPlannerPage() {
             ))}
           </div>
 
-          <div className="grid grid-cols-7 gap-1.5 text-center text-[11px] font-semibold text-day-text-secondary dark:text-night-text-secondary sm:gap-2 sm:text-xs">
-            {[
-              "Sun",
-              "Mon",
-              "Tue",
-              "Wed",
-              "Thu",
-              "Fri",
-              "Sat",
-            ].map((weekDay) => (
-              <div key={weekDay}>{weekDay}</div>
-            ))}
-          </div>
+          <div className="overflow-x-auto">
+            <div className="min-w-[320px]">
+              <div className="grid grid-cols-7 gap-1 text-center text-[10px] font-semibold text-day-text-secondary dark:text-night-text-secondary sm:gap-2 sm:text-xs">
+                {[
+                  "Sun",
+                  "Mon",
+                  "Tue",
+                  "Wed",
+                  "Thu",
+                  "Fri",
+                  "Sat",
+                ].map((weekDay) => (
+                  <div key={weekDay}>{weekDay}</div>
+                ))}
+              </div>
 
-          <div className="mt-2 grid grid-cols-7 gap-1.5 sm:gap-2">
-            {monthGrid.map((cell, index) => {
-              if (!cell.date || !cell.day) {
-                return <div key={`empty-${index}`} className="h-14 sm:h-20" />;
-              }
+              <div className="mt-2 grid grid-cols-7 gap-1 sm:gap-2">
+                {monthGrid.map((cell, index) => {
+                  const statusDate = cell.date;
+                  if (!statusDate || !cell.day) {
+                    return <div key={`empty-${index}`} className="aspect-square" />;
+                  }
 
-              const dayStatus = calendarMap.get(cell.date);
-              const isToday = cell.date === new Date().toISOString().slice(0, 10);
+                  const dayStatus = calendarMap.get(statusDate);
+                  const isToday = statusDate === new Date().toISOString().slice(0, 10);
 
-              return (
-                <button
-                  key={cell.date}
-                  onClick={() => setCalendarDay(cell.date!, selectedCalendarStatus)}
-                  className={`relative h-14 rounded-lg border px-1.5 py-1 text-left transition sm:h-20 sm:px-2 sm:py-2 ${
-                    dayStatus
-                      ? calendarStatusTheme[dayStatus.status].cell
-                      : "border-day-border bg-day-card text-day-text-primary dark:border-night-border dark:bg-night-card dark:text-night-text-primary"
-                  } ${isToday ? "ring-2 ring-day-accent-primary dark:ring-night-accent" : ""}`}
-                >
-                  <span className="text-xs font-semibold sm:text-sm">{cell.day}</span>
-                  {dayStatus ? (
-                    <span
-                      className={`absolute bottom-1.5 left-1.5 h-2.5 w-2.5 rounded-full sm:bottom-2 sm:left-2 ${calendarStatusTheme[dayStatus.status].dot}`}
-                    />
-                  ) : null}
-                  {dayStatus?.streak_count ? (
-                    <span className="absolute bottom-1 right-1 rounded-full bg-black/10 px-1.5 py-0.5 text-[10px] font-semibold dark:bg-white/10 sm:bottom-2 sm:right-2">
-                      {dayStatus.streak_count}
-                    </span>
-                  ) : null}
-                </button>
-              );
-            })}
+                  return (
+                    <button
+                      key={statusDate}
+                      onClick={() => setCalendarDay(statusDate, selectedCalendarStatus)}
+                      className={`relative aspect-square rounded-lg border p-1 text-left transition sm:p-2 ${
+                        dayStatus
+                          ? calendarStatusTheme[dayStatus.status].cell
+                          : "border-day-border bg-day-card text-day-text-primary dark:border-night-border dark:bg-night-card dark:text-night-text-primary"
+                      } ${isToday ? "ring-2 ring-day-accent-primary dark:ring-night-accent" : ""}`}
+                    >
+                      <span className="text-xs font-semibold sm:text-sm">{cell.day}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
           </div>
 
           <p className="mt-4 text-xs text-day-text-secondary dark:text-night-text-secondary">
