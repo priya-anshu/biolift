@@ -3,6 +3,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
 import { CalendarDays, CheckCircle2, Dumbbell, Plus, Sparkles, XCircle } from "lucide-react";
+import type {
+  ExerciseRecommendation,
+  TrainingIntelligenceResult,
+} from "@/lib/workout-planner/intelligenceEngine";
 
 type PlannerTab = "smart" | "manual" | "calendar";
 type CalendarStatus = "completed" | "missed" | "rest_day" | "planned";
@@ -15,6 +19,15 @@ type PlanRow = {
   workout_days_per_week: number;
   planning_mode: "smart" | "manual";
   is_active: boolean;
+};
+
+type TodayPlanExercise = {
+  id: string;
+  exercise_name: string;
+  sets: number;
+  reps_min: number;
+  reps_max: number;
+  rest_seconds: number;
 };
 
 type CalendarRow = {
@@ -186,6 +199,30 @@ function normalizeGoal(goal: string) {
   return goal.replaceAll("_", " ");
 }
 
+function toIsoDateKey(date: Date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function formatProgressionAction(action: ExerciseRecommendation["progression_action"]) {
+  return action.replaceAll("_", " ").replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function getProgressionBadgeClass(action: ExerciseRecommendation["progression_action"]) {
+  if (action === "increase") {
+    return "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300";
+  }
+  if (action === "maintain") {
+    return "bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-300";
+  }
+  if (action === "reduce") {
+    return "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300";
+  }
+  if (action === "deload") {
+    return "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300";
+  }
+  return "bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300";
+}
+
 function extractCloudinaryAssetId(rawValue: string) {
   const value = rawValue.trim();
   if (!value) return "";
@@ -260,6 +297,21 @@ export default function WorkoutPlannerPage() {
     createManualDay(3),
   ]);
 
+  const [recommendationDate, setRecommendationDate] = useState<string>(
+    toIsoDateKey(new Date()),
+  );
+  const [lookbackDays, setLookbackDays] = useState<number>(42);
+  const [recommendationDayIndex, setRecommendationDayIndex] = useState<number | null>(
+    null,
+  );
+  const [recommendations, setRecommendations] =
+    useState<TrainingIntelligenceResult | null>(null);
+  const [recommendationsLoading, setRecommendationsLoading] = useState<boolean>(false);
+  const [recommendationsError, setRecommendationsError] = useState<string | null>(null);
+  const [baselinePlanExercises, setBaselinePlanExercises] = useState<TodayPlanExercise[]>(
+    [],
+  );
+
   const calendarMap = useMemo(
     () => new Map(calendarRows.map((row) => [row.status_date, row])),
     [calendarRows],
@@ -275,6 +327,12 @@ export default function WorkoutPlannerPage() {
       }),
     [month],
   );
+
+  const activePlan = useMemo(
+    () => plans.find((plan) => plan.is_active) ?? null,
+    [plans],
+  );
+  const activePlanId = activePlan?.id ?? null;
 
   const loadPlans = async () => {
     const response = await fetch("/api/workout-planner/plans", {
@@ -304,10 +362,61 @@ export default function WorkoutPlannerPage() {
     setCalendarRows(payload.items ?? []);
   };
 
+  const loadRecommendations = async () => {
+    setRecommendationsLoading(true);
+    setRecommendationsError(null);
+
+    try {
+      const params = new URLSearchParams({
+        workoutDate: recommendationDate,
+        lookbackDays: String(lookbackDays),
+      });
+      if (recommendationDayIndex !== null) {
+        params.set("dayIndex", String(recommendationDayIndex));
+      }
+      if (activePlanId) {
+        params.set("planId", activePlanId);
+      }
+
+      const [recRes, baselineRes] = await Promise.all([
+        fetch(`/api/workout-planner/recommendations?${params.toString()}`, {
+          cache: "no-store",
+        }),
+        fetch("/api/dashboard/motivation", { cache: "no-store" }),
+      ]);
+
+      const recPayload = (await recRes.json()) as {
+        recommendations?: TrainingIntelligenceResult;
+        error?: string;
+      };
+      if (!recRes.ok || !recPayload.recommendations) {
+        throw new Error(recPayload.error ?? "Failed to load recommendations");
+      }
+      setRecommendations(recPayload.recommendations);
+
+      const baselinePayload = (await baselineRes.json()) as {
+        todayPlan?: {
+          id: string;
+          name: string;
+          exercises?: TodayPlanExercise[];
+        } | null;
+      };
+      setBaselinePlanExercises(baselinePayload.todayPlan?.exercises ?? []);
+    } catch (e) {
+      setRecommendations(null);
+      setBaselinePlanExercises([]);
+      setRecommendationsError(
+        e instanceof Error ? e.message : "Failed to load recommendations",
+      );
+    } finally {
+      setRecommendationsLoading(false);
+    }
+  };
+
   const refreshAll = async () => {
     setError(null);
     try {
-      await Promise.all([loadPlans(), loadCalendar(month)]);
+      await Promise.all([loadPlans(), loadCalendar(month), loadRecommendations()]);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to refresh data");
     }
@@ -316,6 +425,10 @@ export default function WorkoutPlannerPage() {
   useEffect(() => {
     void refreshAll();
   }, []);
+
+  useEffect(() => {
+    void loadRecommendations();
+  }, [activePlanId, recommendationDate, recommendationDayIndex, lookbackDays]);
 
   const submitSmart = async () => {
     setIsBusy(true);
@@ -343,6 +456,7 @@ export default function WorkoutPlannerPage() {
 
       setNotice("Smart workout plan generated.");
       await loadPlans();
+      await loadRecommendations();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to generate smart plan");
     } finally {
@@ -495,6 +609,7 @@ export default function WorkoutPlannerPage() {
 
       setNotice("Manual workout plan created.");
       await loadPlans();
+      await loadRecommendations();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to create manual plan");
     } finally {
@@ -521,6 +636,7 @@ export default function WorkoutPlannerPage() {
       setPlans((prev) =>
         prev.map((plan) => (plan.id === planId ? { ...plan, is_active: isActive } : plan)),
       );
+      await loadRecommendations();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to update plan status");
     }
@@ -565,6 +681,23 @@ export default function WorkoutPlannerPage() {
   };
 
   const activePlans = plans.filter((plan) => plan.is_active).length;
+  const baselineByPlanExerciseId = useMemo(
+    () => new Map(baselinePlanExercises.map((item) => [item.id, item])),
+    [baselinePlanExercises],
+  );
+
+  const recommendationRows = useMemo(
+    () =>
+      (recommendations?.recommendations ?? []).map((recommendation) => ({
+        recommendation,
+        baseline: baselineByPlanExerciseId.get(recommendation.plan_exercise_id) ?? null,
+      })),
+    [baselineByPlanExerciseId, recommendations],
+  );
+
+  const retryRecommendations = async () => {
+    await loadRecommendations();
+  };
 
   return (
     <div className="space-y-6">
@@ -650,8 +783,9 @@ export default function WorkoutPlannerPage() {
       </motion.section>
 
       {tab === "smart" ? (
-        <section className="grid gap-6 xl:grid-cols-[1.35fr,1fr]">
-          <div className={`${CARD_CLASS} p-6`}>
+        <>
+          <section className="grid gap-6 xl:grid-cols-[1.35fr,1fr]">
+            <div className={`${CARD_CLASS} p-6`}>
             <h2 className="text-xl font-semibold">Generate Smart Plan</h2>
             <p className="mt-1 text-sm text-day-text-secondary dark:text-night-text-secondary">
               Goal-driven split logic with fatigue-safe distribution.
@@ -746,9 +880,9 @@ export default function WorkoutPlannerPage() {
             <button className="btn-primary mt-5" disabled={isBusy} onClick={submitSmart}>
               {isBusy ? "Generating..." : "Generate Smart Plan"}
             </button>
-          </div>
+            </div>
 
-          <div className={`${CARD_CLASS} p-6`}>
+            <div className={`${CARD_CLASS} p-6`}>
             <h3 className="text-xl font-semibold">Plan Library</h3>
             <p className="mt-1 text-sm text-day-text-secondary dark:text-night-text-secondary">
               Activate one plan at a time.
@@ -805,8 +939,234 @@ export default function WorkoutPlannerPage() {
                 </div>
               ) : null}
             </div>
-          </div>
-        </section>
+            </div>
+          </section>
+
+          <section className={`${CARD_CLASS} p-6`}>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h3 className="text-xl font-semibold">AI Workout Recommendations</h3>
+                <p className="mt-1 text-sm text-day-text-secondary dark:text-night-text-secondary">
+                  Intelligent progression powered by performance, recovery, and injury signals.
+                </p>
+              </div>
+              <button
+                className="btn-ghost"
+                onClick={() => {
+                  void retryRecommendations();
+                }}
+                disabled={recommendationsLoading}
+              >
+                {recommendationsLoading ? "Refreshing..." : "Refresh AI"}
+              </button>
+            </div>
+
+            <div className="mt-4 grid gap-3 md:grid-cols-3">
+              <label className="space-y-1">
+                <span className="text-[11px] font-semibold uppercase tracking-wide text-day-text-secondary dark:text-night-text-secondary">
+                  Workout Date
+                </span>
+                <input
+                  className="input-field"
+                  type="date"
+                  value={recommendationDate}
+                  onChange={(event) => setRecommendationDate(event.target.value)}
+                />
+              </label>
+
+              <label className="space-y-1">
+                <span className="text-[11px] font-semibold uppercase tracking-wide text-day-text-secondary dark:text-night-text-secondary">
+                  Day Index
+                </span>
+                <select
+                  className="input-field"
+                  value={recommendationDayIndex === null ? "" : String(recommendationDayIndex)}
+                  onChange={(event) =>
+                    setRecommendationDayIndex(
+                      event.target.value ? Number(event.target.value) : null,
+                    )
+                  }
+                >
+                  <option value="">Auto (from date)</option>
+                  <option value="1">1 - Monday</option>
+                  <option value="2">2 - Tuesday</option>
+                  <option value="3">3 - Wednesday</option>
+                  <option value="4">4 - Thursday</option>
+                  <option value="5">5 - Friday</option>
+                  <option value="6">6 - Saturday</option>
+                  <option value="7">7 - Sunday</option>
+                </select>
+              </label>
+
+              <label className="space-y-1">
+                <span className="text-[11px] font-semibold uppercase tracking-wide text-day-text-secondary dark:text-night-text-secondary">
+                  Lookback Days
+                </span>
+                <select
+                  className="input-field"
+                  value={lookbackDays}
+                  onChange={(event) => setLookbackDays(Number(event.target.value))}
+                >
+                  <option value={28}>28 days</option>
+                  <option value={42}>42 days</option>
+                  <option value={56}>56 days</option>
+                  <option value={90}>90 days</option>
+                </select>
+              </label>
+            </div>
+
+            {recommendationsLoading ? (
+              <div className="mt-5 space-y-3">
+                {Array.from({ length: 3 }).map((_, index) => (
+                  <div
+                    key={`recommendation-skeleton-${index}`}
+                    className="animate-pulse rounded-xl border border-day-border p-4 dark:border-night-border"
+                  >
+                    <div className="h-4 w-40 rounded bg-day-border dark:bg-night-border" />
+                    <div className="mt-3 h-3 w-64 rounded bg-day-border dark:bg-night-border" />
+                    <div className="mt-2 h-3 w-56 rounded bg-day-border dark:bg-night-border" />
+                    <div className="mt-2 h-3 w-48 rounded bg-day-border dark:bg-night-border" />
+                  </div>
+                ))}
+              </div>
+            ) : null}
+
+            {!recommendationsLoading && recommendationsError ? (
+              <div className="mt-5 rounded-xl border border-red-200 bg-red-50 p-4 dark:border-red-900/30 dark:bg-red-900/20">
+                <p className="text-sm text-red-700 dark:text-red-300">
+                  {recommendationsError}
+                </p>
+                <button
+                  className="mt-3 rounded-lg border border-red-300 px-3 py-1.5 text-xs font-semibold text-red-700 transition hover:bg-red-100 dark:border-red-700 dark:text-red-300 dark:hover:bg-red-900/40"
+                  onClick={() => {
+                    void retryRecommendations();
+                  }}
+                >
+                  Retry
+                </button>
+              </div>
+            ) : null}
+
+            {!recommendationsLoading &&
+            !recommendationsError &&
+            recommendationRows.length > 0 ? (
+              <div className="mt-5 space-y-3">
+                <div className="rounded-lg border border-day-border bg-day-hover/60 px-3 py-2 text-xs text-day-text-secondary dark:border-night-border dark:bg-night-hover/40 dark:text-night-text-secondary">
+                  Readiness:{" "}
+                  <span className="font-semibold">{recommendations?.readiness_band ?? "-"}</span>
+                  {" · "}
+                  Fatigue:{" "}
+                  <span className="font-semibold">
+                    {recommendations?.fatigue_score ?? "-"}
+                  </span>
+                  {" · "}
+                  Adherence:{" "}
+                  <span className="font-semibold">
+                    {recommendations?.adherence_score ?? "-"}
+                  </span>
+                </div>
+
+                {recommendationRows.map(({ recommendation, baseline }) => {
+                  const hasWeight = recommendation.recommended_weight !== null;
+                  const isAdjustedFromBaseline = baseline
+                    ? baseline.sets !== recommendation.recommended_sets ||
+                      baseline.reps_min !== recommendation.recommended_reps.min ||
+                      baseline.reps_max !== recommendation.recommended_reps.max ||
+                      baseline.rest_seconds !== recommendation.rest_seconds
+                    : false;
+                  const exerciseName =
+                    baseline?.exercise_name ??
+                    recommendation.original_exercise_id ??
+                    "Exercise";
+
+                  return (
+                    <div
+                      key={recommendation.plan_exercise_id}
+                      className="rounded-xl border border-day-border bg-day-hover/60 p-4 dark:border-night-border dark:bg-night-hover/40"
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <div>
+                          <p className="font-semibold">{exerciseName}</p>
+                          <p className="mt-1 text-sm text-day-text-secondary dark:text-night-text-secondary">
+                            Recommended: {recommendation.recommended_sets} sets x{" "}
+                            {recommendation.recommended_reps.min}-
+                            {recommendation.recommended_reps.max} reps
+                          </p>
+                          <p className="text-sm text-day-text-secondary dark:text-night-text-secondary">
+                            Weight:{" "}
+                            {hasWeight
+                              ? `${recommendation.recommended_weight} kg`
+                              : "Auto-load after first completed sets"}
+                            {" · "}Rest: {recommendation.rest_seconds}s
+                          </p>
+                          {baseline ? (
+                            <p className="mt-1 text-xs text-day-text-secondary dark:text-night-text-secondary">
+                              Baseline: {baseline.sets} sets x {baseline.reps_min}-
+                              {baseline.reps_max} reps · Rest {baseline.rest_seconds}s
+                            </p>
+                          ) : null}
+                          {isAdjustedFromBaseline ? (
+                            <p className="mt-1 text-xs font-semibold text-day-accent-primary dark:text-night-accent">
+                              AI adjusted this exercise from your baseline plan.
+                            </p>
+                          ) : null}
+                        </div>
+
+                        <span
+                          className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${getProgressionBadgeClass(
+                            recommendation.progression_action,
+                          )}`}
+                        >
+                          {formatProgressionAction(recommendation.progression_action)}
+                        </span>
+                      </div>
+
+                      <p className="mt-2 text-xs text-day-text-secondary dark:text-night-text-secondary">
+                        Reason:{" "}
+                        {recommendation.recommendation_reason.length > 0
+                          ? recommendation.recommendation_reason.join(" | ")
+                          : "No explicit reason provided."}
+                      </p>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : null}
+
+            {!recommendationsLoading &&
+            !recommendationsError &&
+            recommendationRows.length === 0 ? (
+              <div className="mt-5 space-y-3">
+                <div className="rounded-xl border border-dashed border-day-border px-4 py-3 text-sm text-day-text-secondary dark:border-night-border dark:text-night-text-secondary">
+                  Using baseline plan - recommendations will adapt after your workouts.
+                </div>
+
+                {baselinePlanExercises.length > 0 ? (
+                  baselinePlanExercises.map((exercise) => (
+                    <div
+                      key={`baseline-${exercise.id}`}
+                      className="rounded-xl border border-day-border bg-day-hover/60 p-4 dark:border-night-border dark:bg-night-hover/40"
+                    >
+                      <p className="font-semibold">{exercise.exercise_name}</p>
+                      <p className="mt-1 text-sm text-day-text-secondary dark:text-night-text-secondary">
+                        Recommended: {exercise.sets} sets x {exercise.reps_min}-
+                        {exercise.reps_max} reps
+                      </p>
+                      <p className="text-sm text-day-text-secondary dark:text-night-text-secondary">
+                        Weight: Auto-load after first completed sets · Rest:{" "}
+                        {exercise.rest_seconds}s
+                      </p>
+                    </div>
+                  ))
+                ) : (
+                  <div className="rounded-xl border border-dashed border-day-border px-4 py-3 text-sm text-day-text-secondary dark:border-night-border dark:text-night-text-secondary">
+                    No baseline workout exercises found for the selected date.
+                  </div>
+                )}
+              </div>
+            ) : null}
+          </section>
+        </>
       ) : null}
 
       {tab === "manual" ? (
@@ -1413,4 +1773,3 @@ export default function WorkoutPlannerPage() {
     </div>
   );
 }
-

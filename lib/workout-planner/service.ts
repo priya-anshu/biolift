@@ -1,5 +1,9 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { buildSmartExercises } from "@/lib/workout-planner/smartPlanner";
+import {
+  getNextWorkoutRecommendations,
+  type TrainingIntelligenceRequest,
+} from "@/lib/workout-planner/intelligenceEngine";
 import type {
   CalendarStatusRequest,
   CalendarDayStatus,
@@ -541,4 +545,14 @@ export async function getMotivationSnapshot(
     totalCompletedWorkouts: totalCompletedRes.count ?? 0,
     todayLog: todayLogRes.data ?? null,
   };
+}
+
+export async function getWorkoutRecommendations(
+  context: ServiceContext,
+  input: TrainingIntelligenceRequest,
+) {
+  return getNextWorkoutRecommendations(
+    { client: context.client, profileId: context.profileId },
+    input,
+  );
 }
