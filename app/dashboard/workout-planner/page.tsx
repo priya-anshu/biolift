@@ -262,6 +262,7 @@ function extractCloudinaryAssetId(rawValue: string) {
 
 export default function WorkoutPlannerPage() {
   const [tab, setTab] = useState<PlannerTab>("smart");
+  const [advancedMode, setAdvancedMode] = useState(false);
   const [plans, setPlans] = useState<PlanRow[]>([]);
   const [calendarRows, setCalendarRows] = useState<CalendarRow[]>([]);
   const [month, setMonth] = useState(new Date());
@@ -311,6 +312,13 @@ export default function WorkoutPlannerPage() {
   const [baselinePlanExercises, setBaselinePlanExercises] = useState<TodayPlanExercise[]>(
     [],
   );
+  const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
+  const [editingPlanId, setEditingPlanId] = useState<string | null>(null);
+  const [planEditForm, setPlanEditForm] = useState({
+    name: "",
+    goal: "general_fitness",
+    workoutDaysPerWeek: 3,
+  });
 
   const calendarMap = useMemo(
     () => new Map(calendarRows.map((row) => [row.status_date, row])),
@@ -333,6 +341,10 @@ export default function WorkoutPlannerPage() {
     [plans],
   );
   const activePlanId = activePlan?.id ?? null;
+  const selectedPlan = useMemo(
+    () => plans.find((plan) => plan.id === selectedPlanId) ?? activePlan ?? null,
+    [activePlan, plans, selectedPlanId],
+  );
 
   const loadPlans = async () => {
     const response = await fetch("/api/workout-planner/plans", {
@@ -429,6 +441,22 @@ export default function WorkoutPlannerPage() {
   useEffect(() => {
     void loadRecommendations();
   }, [activePlanId, recommendationDate, recommendationDayIndex, lookbackDays]);
+
+  useEffect(() => {
+    if (!advancedMode && (tab === "manual" || tab === "calendar")) {
+      setTab("smart");
+    }
+  }, [advancedMode, tab]);
+
+  useEffect(() => {
+    if (plans.length === 0) {
+      setSelectedPlanId(null);
+      setEditingPlanId(null);
+      return;
+    }
+    if (selectedPlanId && plans.some((plan) => plan.id === selectedPlanId)) return;
+    setSelectedPlanId(activePlanId ?? plans[0]?.id ?? null);
+  }, [activePlanId, plans, selectedPlanId]);
 
   const submitSmart = async () => {
     setIsBusy(true);
@@ -627,18 +655,93 @@ export default function WorkoutPlannerPage() {
         body: JSON.stringify({ isActive }),
       });
 
-      const payload = (await response.json()) as { error?: string };
+      const payload = (await response.json()) as {
+        plan?: Partial<PlanRow> & { id?: string };
+        error?: string;
+      };
       if (!response.ok) {
         setError(payload.error ?? "Failed to update plan status");
         return;
       }
 
       setPlans((prev) =>
-        prev.map((plan) => (plan.id === planId ? { ...plan, is_active: isActive } : plan)),
+        prev.map((plan) =>
+          plan.id === planId
+            ? {
+                ...plan,
+                ...payload.plan,
+                id: plan.id,
+                is_active: isActive,
+              }
+            : plan,
+        ),
       );
       await loadRecommendations();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to update plan status");
+    }
+  };
+
+  const beginEditPlan = (plan: PlanRow) => {
+    setSelectedPlanId(plan.id);
+    setEditingPlanId(plan.id);
+    setPlanEditForm({
+      name: plan.name,
+      goal: plan.goal,
+      workoutDaysPerWeek: plan.workout_days_per_week,
+    });
+  };
+
+  const savePlanEdits = async (planId: string) => {
+    if (!planEditForm.name.trim()) {
+      setError("Plan name is required.");
+      return;
+    }
+    setIsBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const response = await fetch(`/api/workout-planner/plans/${planId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: planEditForm.name.trim(),
+          goal: planEditForm.goal,
+          workoutDaysPerWeek: Math.max(1, Math.min(7, planEditForm.workoutDaysPerWeek)),
+        }),
+      });
+      const payload = (await response.json()) as {
+        plan?: Partial<PlanRow> & { id?: string };
+        error?: string;
+      };
+      if (!response.ok || !payload.plan) {
+        setError(payload.error ?? "Failed to save plan updates");
+        return;
+      }
+      const updatedPlan = payload.plan;
+      setPlans((prev) =>
+        prev.map((plan) =>
+          plan.id === planId
+            ? {
+                ...plan,
+                ...updatedPlan,
+                id: plan.id,
+                workout_days_per_week:
+                  (updatedPlan.workout_days_per_week as number | undefined) ??
+                  planEditForm.workoutDaysPerWeek,
+                goal: (updatedPlan.goal as string | undefined) ?? planEditForm.goal,
+                name: (updatedPlan.name as string | undefined) ?? planEditForm.name.trim(),
+              }
+            : plan,
+        ),
+      );
+      setNotice("Plan updated.");
+      setEditingPlanId(null);
+      await loadRecommendations();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to save plan updates");
+    } finally {
+      setIsBusy(false);
     }
   };
 
@@ -714,8 +817,8 @@ export default function WorkoutPlannerPage() {
               </p>
               <h1 className="mt-2 text-2xl font-bold md:text-3xl">Train With Structure</h1>
               <p className="mt-2 max-w-2xl text-sm text-white/90 md:text-base">
-                Keep the classic BioLift workout style while generating smart plans,
-                building manual blocks, and tracking completion day by day.
+                Build and manage your active training plan. Workout execution happens in
+                Today&apos;s Workout.
               </p>
             </div>
             <div className="rounded-xl border border-white/30 bg-white/10 px-4 py-3 backdrop-blur">
@@ -737,35 +840,51 @@ export default function WorkoutPlannerPage() {
                 }`}
               >
                 <Sparkles className="mr-2 h-4 w-4" />
-                Smart
+                Plan
               </button>
-              <button
-                onClick={() => setTab("manual")}
-                className={`${TAB_BUTTON_CLASS} ${
-                  tab === "manual"
-                    ? "bg-day-accent-primary text-white shadow-glow-blue dark:bg-night-accent dark:shadow-glow"
-                    : "btn-ghost"
-                }`}
-              >
-                <Dumbbell className="mr-2 h-4 w-4" />
-                Manual
-              </button>
-              <button
-                onClick={() => setTab("calendar")}
-                className={`${TAB_BUTTON_CLASS} ${
-                  tab === "calendar"
-                    ? "bg-day-accent-primary text-white shadow-glow-blue dark:bg-night-accent dark:shadow-glow"
-                    : "btn-ghost"
-                }`}
-              >
-                <CalendarDays className="mr-2 h-4 w-4" />
-                Calendar
-              </button>
+              {advancedMode ? (
+                <button
+                  onClick={() => setTab("calendar")}
+                  className={`${TAB_BUTTON_CLASS} ${
+                    tab === "calendar"
+                      ? "bg-day-accent-primary text-white shadow-glow-blue dark:bg-night-accent dark:shadow-glow"
+                      : "btn-ghost"
+                  }`}
+                >
+                  <CalendarDays className="mr-2 h-4 w-4" />
+                  Calendar
+                </button>
+              ) : null}
+              {advancedMode ? (
+                <button
+                  onClick={() => setTab("manual")}
+                  className={`${TAB_BUTTON_CLASS} ${
+                    tab === "manual"
+                      ? "bg-day-accent-primary text-white shadow-glow-blue dark:bg-night-accent dark:shadow-glow"
+                      : "btn-ghost"
+                  }`}
+                >
+                  <Dumbbell className="mr-2 h-4 w-4" />
+                  Advanced Builder
+                </button>
+              ) : null}
             </div>
 
-            <button className="btn-ghost" onClick={refreshAll}>
-              Refresh Data
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                className={`rounded-lg px-3 py-2 text-xs font-semibold transition ${
+                  advancedMode
+                    ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300"
+                    : "btn-ghost"
+                }`}
+                onClick={() => setAdvancedMode((prev) => !prev)}
+              >
+                Advanced Mode: {advancedMode ? "On" : "Off"}
+              </button>
+              <button className="btn-ghost" onClick={refreshAll}>
+                Refresh Data
+              </button>
+            </div>
           </div>
 
           {error ? (
@@ -779,6 +898,12 @@ export default function WorkoutPlannerPage() {
               {notice}
             </div>
           ) : null}
+          {!advancedMode ? (
+            <div className="mt-4 rounded-lg border border-sky-200 bg-sky-50 px-4 py-2 text-xs text-sky-700 dark:border-sky-900/40 dark:bg-sky-900/20 dark:text-sky-300">
+              AI progression is automatically applied to your next workout. Open
+              Advanced Mode to inspect recommendation details.
+            </div>
+          ) : null}
         </div>
       </motion.section>
 
@@ -786,9 +911,9 @@ export default function WorkoutPlannerPage() {
         <>
           <section className="grid gap-6 xl:grid-cols-[1.35fr,1fr]">
             <div className={`${CARD_CLASS} p-6`}>
-            <h2 className="text-xl font-semibold">Generate Smart Plan</h2>
+            <h2 className="text-xl font-semibold">Generate Plan</h2>
             <p className="mt-1 text-sm text-day-text-secondary dark:text-night-text-secondary">
-              Goal-driven split logic with fatigue-safe distribution.
+              Create your next training cycle using goal-driven split logic.
             </p>
 
             <div className="mt-5 grid gap-3 md:grid-cols-2">
@@ -878,7 +1003,7 @@ export default function WorkoutPlannerPage() {
             </div>
 
             <button className="btn-primary mt-5" disabled={isBusy} onClick={submitSmart}>
-              {isBusy ? "Generating..." : "Generate Smart Plan"}
+              {isBusy ? "Generating..." : "Generate Plan"}
             </button>
             </div>
 
@@ -916,7 +1041,7 @@ export default function WorkoutPlannerPage() {
                     </span>
                   </div>
 
-                  <div className="mt-3 flex gap-2">
+                  <div className="mt-3 flex flex-wrap gap-2">
                     <button
                       onClick={() => togglePlan(plan.id, true)}
                       className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-emerald-700"
@@ -924,12 +1049,82 @@ export default function WorkoutPlannerPage() {
                       Activate
                     </button>
                     <button
-                      onClick={() => togglePlan(plan.id, false)}
+                      onClick={() => setSelectedPlanId(plan.id)}
                       className="rounded-lg border border-day-border px-3 py-1.5 text-xs font-semibold text-day-text-secondary transition hover:bg-day-hover dark:border-night-border dark:text-night-text-secondary dark:hover:bg-night-hover"
                     >
-                      Archive
+                      View Plan
                     </button>
+                    <button
+                      onClick={() => beginEditPlan(plan)}
+                      className="rounded-lg border border-day-border px-3 py-1.5 text-xs font-semibold text-day-text-secondary transition hover:bg-day-hover dark:border-night-border dark:text-night-text-secondary dark:hover:bg-night-hover"
+                    >
+                      Edit Plan
+                    </button>
+                    {advancedMode ? (
+                      <button
+                        onClick={() => togglePlan(plan.id, false)}
+                        className="rounded-lg border border-day-border px-3 py-1.5 text-xs font-semibold text-day-text-secondary transition hover:bg-day-hover dark:border-night-border dark:text-night-text-secondary dark:hover:bg-night-hover"
+                      >
+                        Archive
+                      </button>
+                    ) : null}
                   </div>
+
+                  {editingPlanId === plan.id ? (
+                    <div className="mt-3 grid gap-2 rounded-lg border border-day-border bg-day-card p-3 dark:border-night-border dark:bg-night-card md:grid-cols-2">
+                      <input
+                        className="input-field md:col-span-2"
+                        value={planEditForm.name}
+                        onChange={(event) =>
+                          setPlanEditForm((prev) => ({ ...prev, name: event.target.value }))
+                        }
+                        placeholder="Plan name"
+                      />
+                      <select
+                        className="input-field"
+                        value={planEditForm.goal}
+                        onChange={(event) =>
+                          setPlanEditForm((prev) => ({ ...prev, goal: event.target.value }))
+                        }
+                      >
+                        <option value="fat_loss">Fat Loss</option>
+                        <option value="hypertrophy">Hypertrophy</option>
+                        <option value="strength">Strength</option>
+                        <option value="general_fitness">General Fitness</option>
+                      </select>
+                      <input
+                        className="input-field"
+                        type="number"
+                        min={1}
+                        max={7}
+                        value={planEditForm.workoutDaysPerWeek}
+                        onChange={(event) =>
+                          setPlanEditForm((prev) => ({
+                            ...prev,
+                            workoutDaysPerWeek: Number(event.target.value),
+                          }))
+                        }
+                        placeholder="Days / Week"
+                      />
+                      <div className="flex gap-2 md:col-span-2">
+                        <button
+                          className="rounded-lg bg-day-accent-primary px-3 py-1.5 text-xs font-semibold text-white dark:bg-night-accent"
+                          disabled={isBusy}
+                          onClick={() => {
+                            void savePlanEdits(plan.id);
+                          }}
+                        >
+                          {isBusy ? "Saving..." : "Save Changes"}
+                        </button>
+                        <button
+                          className="rounded-lg border border-day-border px-3 py-1.5 text-xs font-semibold text-day-text-secondary transition hover:bg-day-hover dark:border-night-border dark:text-night-text-secondary dark:hover:bg-night-hover"
+                          onClick={() => setEditingPlanId(null)}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               ))}
 
@@ -943,6 +1138,42 @@ export default function WorkoutPlannerPage() {
           </section>
 
           <section className={`${CARD_CLASS} p-6`}>
+            <h3 className="text-xl font-semibold">Active Plan</h3>
+            {selectedPlan ? (
+              <div className="mt-4 rounded-xl border border-day-border bg-day-hover/60 p-4 dark:border-night-border dark:bg-night-hover/40">
+                <p className="font-semibold">{selectedPlan.name}</p>
+                <p className="mt-1 text-sm text-day-text-secondary dark:text-night-text-secondary">
+                  Goal: {normalizeGoal(selectedPlan.goal)}
+                </p>
+                <p className="mt-1 text-sm text-day-text-secondary dark:text-night-text-secondary">
+                  Experience: {selectedPlan.experience_level} - Days/week:{" "}
+                  {selectedPlan.workout_days_per_week}
+                </p>
+                <p className="mt-1 text-sm text-day-text-secondary dark:text-night-text-secondary">
+                  Planning mode: {selectedPlan.planning_mode} -{" "}
+                  {selectedPlan.is_active ? "Active" : "Inactive"}
+                </p>
+                <p className="mt-1 text-sm text-day-text-secondary dark:text-night-text-secondary">
+                  AI adjustments:{" "}
+                  {recommendationRows.length > 0
+                    ? `${recommendationRows.length} exercise updates ready`
+                    : "Using baseline progression until more session data is available"}
+                </p>
+              </div>
+            ) : (
+              <div className="mt-4 rounded-xl border border-dashed border-day-border px-4 py-3 text-sm text-day-text-secondary dark:border-night-border dark:text-night-text-secondary">
+                No active plan yet. Generate a plan to begin.
+              </div>
+            )}
+            {!advancedMode ? (
+              <p className="mt-4 text-sm text-day-text-secondary dark:text-night-text-secondary">
+                AI recommendations are being applied automatically in workout sessions.
+              </p>
+            ) : null}
+          </section>
+
+          {advancedMode ? (
+            <section className={`${CARD_CLASS} p-6`}>
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <h3 className="text-xl font-semibold">AI Workout Recommendations</h3>
@@ -1165,11 +1396,12 @@ export default function WorkoutPlannerPage() {
                 )}
               </div>
             ) : null}
-          </section>
+            </section>
+          ) : null}
         </>
       ) : null}
 
-      {tab === "manual" ? (
+      {advancedMode && tab === "manual" ? (
         <section className={`${CARD_CLASS} p-6`}>
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
@@ -1637,7 +1869,7 @@ export default function WorkoutPlannerPage() {
           </div>
         </section>
       ) : null}
-      {tab === "calendar" ? (
+      {advancedMode && tab === "calendar" ? (
         <section className={`${CARD_CLASS} p-5 sm:p-6`}>
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
             <div>
@@ -1744,32 +1976,34 @@ export default function WorkoutPlannerPage() {
         </section>
       ) : null}
 
-      <section className={`${CARD_CLASS} p-5 sm:p-6`}>
-        <div className="flex items-center gap-2">
-          <CheckCircle2 className="h-5 w-5 text-emerald-500" />
-          <h2 className="text-lg font-semibold">Quick Summary</h2>
-        </div>
-        <div className="mt-3 grid gap-3 sm:grid-cols-3">
-          <div className="rounded-xl border border-day-border bg-day-hover/70 p-3 dark:border-night-border dark:bg-night-hover/50">
-            <p className="text-xs text-day-text-secondary dark:text-night-text-secondary">
-              Total Plans
-            </p>
-            <p className="mt-1 text-xl font-semibold">{plans.length}</p>
+      {advancedMode ? (
+        <section className={`${CARD_CLASS} p-5 sm:p-6`}>
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="h-5 w-5 text-emerald-500" />
+            <h2 className="text-lg font-semibold">Quick Summary</h2>
           </div>
-          <div className="rounded-xl border border-day-border bg-day-hover/70 p-3 dark:border-night-border dark:bg-night-hover/50">
-            <p className="text-xs text-day-text-secondary dark:text-night-text-secondary">
-              Active Plans
-            </p>
-            <p className="mt-1 text-xl font-semibold">{activePlans}</p>
+          <div className="mt-3 grid gap-3 sm:grid-cols-3">
+            <div className="rounded-xl border border-day-border bg-day-hover/70 p-3 dark:border-night-border dark:bg-night-hover/50">
+              <p className="text-xs text-day-text-secondary dark:text-night-text-secondary">
+                Total Plans
+              </p>
+              <p className="mt-1 text-xl font-semibold">{plans.length}</p>
+            </div>
+            <div className="rounded-xl border border-day-border bg-day-hover/70 p-3 dark:border-night-border dark:bg-night-hover/50">
+              <p className="text-xs text-day-text-secondary dark:text-night-text-secondary">
+                Active Plans
+              </p>
+              <p className="mt-1 text-xl font-semibold">{activePlans}</p>
+            </div>
+            <div className="rounded-xl border border-day-border bg-day-hover/70 p-3 dark:border-night-border dark:bg-night-hover/50">
+              <p className="text-xs text-day-text-secondary dark:text-night-text-secondary">
+                Marked Days This Month
+              </p>
+              <p className="mt-1 text-xl font-semibold">{calendarRows.length}</p>
+            </div>
           </div>
-          <div className="rounded-xl border border-day-border bg-day-hover/70 p-3 dark:border-night-border dark:bg-night-hover/50">
-            <p className="text-xs text-day-text-secondary dark:text-night-text-secondary">
-              Marked Days This Month
-            </p>
-            <p className="mt-1 text-xl font-semibold">{calendarRows.length}</p>
-          </div>
-        </div>
-      </section>
+        </section>
+      ) : null}
     </div>
   );
 }

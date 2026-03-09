@@ -15,8 +15,6 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { supabase } from "@/lib/supabase/client";
-import { useAuth } from "@/lib/auth/AuthContext";
 import {
   CartesianGrid,
   Line,
@@ -36,6 +34,9 @@ type Workout = {
   duration_minutes: number | null;
   calories: number | null;
   performed_at: string;
+  status?: string;
+  completion_percentage?: number | null;
+  volume_kg?: number | null;
 };
 
 type Goal = {
@@ -69,9 +70,7 @@ function formatShortDate(value: string) {
 }
 
 export default function ProgressPage() {
-  const { user } = useAuth();
   const [timeRange, setTimeRange] = useState<"week" | "month">("week");
-  const [profileId, setProfileId] = useState<string | null>(null);
   const [workouts, setWorkouts] = useState<Workout[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [heartEntries, setHeartEntries] = useState<ProgressEntry[]>([]);
@@ -82,72 +81,43 @@ export default function ProgressPage() {
   );
   const [logStatus, setLogStatus] = useState<string | null>(null);
   const [logError, setLogError] = useState<string | null>(null);
-  const [manualWorkout, setManualWorkout] = useState({
-    name: "",
-    type: "Strength",
-    duration: "",
-    calories: "",
-    exercise: "",
-    sets: "",
-    reps: "",
-    weightPerSet: "",
-  });
 
   const loadData = useCallback(async () => {
-    if (!user) return;
     setLoading(true);
-    const { data: profile } = await supabase
-      .from("profiles")
-      .select("id")
-      .eq("auth_user_id", user.id)
-      .maybeSingle();
-
-    if (!profile?.id) {
+    const res = await fetch(`/api/progress/overview?range=${timeRange}`, {
+      cache: "no-store",
+    });
+    const payload = (await res.json()) as {
+      workouts?: Workout[];
+      goals?: Goal[];
+      heartEntries?: ProgressEntry[];
+      error?: string;
+    };
+    if (!res.ok) {
+      setLogError(payload.error ?? "Failed to load progress data");
       setLoading(false);
       return;
     }
 
-    setProfileId(profile.id);
-
-    const rangeStart = getRangeStart(timeRange);
-
-    const [workoutsRes, goalsRes, heartRes] = await Promise.all([
-      supabase
-        .from("workouts")
-        .select("id,name,type,duration_minutes,calories,performed_at")
-        .eq("user_id", profile.id)
-        .gte("performed_at", rangeStart.toISOString())
-        .order("performed_at", { ascending: false }),
-      supabase
-        .from("goals")
-        .select("id,title,current_value,target_value,unit")
-        .eq("user_id", profile.id)
-        .order("created_at", { ascending: false })
-        .limit(4),
-      supabase
-        .from("progress_entries")
-        .select("value,metric,recorded_at")
-        .eq("user_id", profile.id)
-        .eq("metric", "heart_rate")
-        .gte("recorded_at", rangeStart.toISOString()),
-    ]);
-
-    setWorkouts((workoutsRes.data as Workout[]) ?? []);
-    setGoals((goalsRes.data as Goal[]) ?? []);
-    setHeartEntries((heartRes.data as ProgressEntry[]) ?? []);
+    setWorkouts(payload.workouts ?? []);
+    setGoals(payload.goals ?? []);
+    setHeartEntries(payload.heartEntries ?? []);
     setLoading(false);
-  }, [timeRange, user]);
+  }, [timeRange]);
 
   useEffect(() => {
     loadData();
   }, [loadData]);
 
-  const workoutsCount = workouts.length;
-  const caloriesBurned = workouts.reduce(
+  const completedWorkouts = workouts.filter(
+    (workout) => (workout.status ?? "completed") === "completed",
+  );
+  const workoutsCount = completedWorkouts.length;
+  const caloriesBurned = completedWorkouts.reduce(
     (sum, workout) => sum + (workout.calories ?? 0),
     0,
   );
-  const activeMinutes = workouts.reduce(
+  const activeMinutes = completedWorkouts.reduce(
     (sum, workout) => sum + (workout.duration_minutes ?? 0),
     0,
   );
@@ -160,7 +130,6 @@ export default function ProgressPage() {
   }, [heartEntries]);
 
   const handleWeightLog = async () => {
-    if (!profileId) return;
     setLogStatus(null);
     setLogError(null);
     const value = Number(weightValue);
@@ -169,71 +138,21 @@ export default function ProgressPage() {
       return;
     }
     const recordedAt = new Date(`${weightDate}T08:00:00Z`).toISOString();
-    const { error } = await supabase.from("progress_entries").insert({
-      user_id: profileId,
-      metric: "body_weight",
-      value,
-      unit: "kg",
-      recorded_at: recordedAt,
-      meta: { source: "manual" },
+    const response = await fetch("/api/progress/log-weight", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        valueKg: value,
+        recordedAt,
+      }),
     });
-    if (error) {
+    const payload = (await response.json()) as { error?: string };
+    if (!response.ok) {
       setLogError("Unable to save weight. Try again.");
       return;
     }
     setLogStatus("Body weight saved.");
     setWeightValue("");
-  };
-
-  const handleWorkoutLog = async () => {
-    if (!profileId) return;
-    setLogStatus(null);
-    setLogError(null);
-    if (!manualWorkout.name.trim()) {
-      setLogError("Workout name is required.");
-      return;
-    }
-    const duration = manualWorkout.duration
-      ? Number(manualWorkout.duration)
-      : null;
-    const calories = manualWorkout.calories
-      ? Number(manualWorkout.calories)
-      : null;
-
-    const { error } = await supabase.from("workouts").insert({
-      user_id: profileId,
-      name: manualWorkout.name,
-      type: manualWorkout.type,
-      duration_minutes: duration,
-      calories,
-      performed_at: new Date().toISOString(),
-      meta: {
-        exercise: manualWorkout.exercise,
-        sets: manualWorkout.sets ? Number(manualWorkout.sets) : null,
-        reps: manualWorkout.reps ? Number(manualWorkout.reps) : null,
-        weight_per_set: manualWorkout.weightPerSet
-          ? Number(manualWorkout.weightPerSet)
-          : null,
-        source: "manual",
-      },
-    });
-
-    if (error) {
-      setLogError("Unable to save workout. Try again.");
-      return;
-    }
-
-    setLogStatus("Workout logged.");
-    setManualWorkout({
-      name: "",
-      type: "Strength",
-      duration: "",
-      calories: "",
-      exercise: "",
-      sets: "",
-      reps: "",
-      weightPerSet: "",
-    });
     await loadData();
   };
 
@@ -242,7 +161,16 @@ export default function ProgressPage() {
     const days = timeRange === "week" ? 7 : 30;
     const buckets = new Map<
       string,
-      { date: string; workouts: number; calories: number; minutes: number; heart: number[] }
+      {
+        date: string;
+        workouts: number;
+        calories: number;
+        minutes: number;
+        volume: number;
+        completed: number;
+        scheduled: number;
+        heart: number[];
+      }
     >();
 
     for (let i = 0; i < days; i += 1) {
@@ -254,6 +182,9 @@ export default function ProgressPage() {
         workouts: 0,
         calories: 0,
         minutes: 0,
+        volume: 0,
+        completed: 0,
+        scheduled: 0,
         heart: [],
       });
     }
@@ -262,9 +193,22 @@ export default function ProgressPage() {
       const key = workout.performed_at.slice(0, 10);
       const bucket = buckets.get(key);
       if (!bucket) return;
-      bucket.workouts += 1;
+      const status = workout.status ?? "completed";
+      if (status === "completed") {
+        bucket.workouts += 1;
+        bucket.completed += 1;
+      }
+      if (
+        status === "completed" ||
+        status === "planned" ||
+        status === "in_progress" ||
+        status === "missed"
+      ) {
+        bucket.scheduled += 1;
+      }
       bucket.calories += workout.calories ?? 0;
       bucket.minutes += workout.duration_minutes ?? 0;
+      bucket.volume += workout.volume_kg ?? 0;
     });
 
     heartEntries.forEach((entry) => {
@@ -280,6 +224,11 @@ export default function ProgressPage() {
       workouts: bucket.workouts,
       calories: bucket.calories,
       minutes: bucket.minutes,
+      volume: Number(bucket.volume.toFixed(2)),
+      consistency:
+        bucket.scheduled > 0
+          ? Number(((bucket.completed / bucket.scheduled) * 100).toFixed(1))
+          : 0,
       heart:
         bucket.heart.length > 0
           ? Math.round(
@@ -480,7 +429,7 @@ export default function ProgressPage() {
         <div className="rounded-2xl border border-day-border bg-day-card p-6 shadow-card dark:border-night-border dark:bg-night-card dark:shadow-card-dark">
           <div className="flex items-center gap-2 text-sm font-semibold">
             <Target className="h-4 w-4 text-day-accent-primary dark:text-night-accent" />
-            Manual Entries
+            Bodyweight Tracking
           </div>
           <div className="mt-4 space-y-4">
             <div>
@@ -510,100 +459,33 @@ export default function ProgressPage() {
             <div className="rounded-xl border border-day-border p-4 text-sm text-day-text-secondary dark:border-night-border dark:text-night-text-secondary">
               Record your weight daily to unlock fair ranking eligibility.
             </div>
+            {logStatus ? (
+              <div className="text-sm text-emerald-600 dark:text-emerald-300">{logStatus}</div>
+            ) : null}
+            {logError ? <div className="text-sm text-rose-500">{logError}</div> : null}
           </div>
         </div>
 
         <div className="rounded-2xl border border-day-border bg-day-card p-6 shadow-card dark:border-night-border dark:bg-night-card dark:shadow-card-dark">
           <div className="flex items-center gap-2 text-sm font-semibold">
             <Activity className="h-4 w-4 text-day-accent-primary dark:text-night-accent" />
-            Manual Workout Log
+            Analytics Source
           </div>
-          <div className="mt-4 grid gap-3 text-sm md:grid-cols-2">
-            <input
-              value={manualWorkout.name}
-              onChange={(event) =>
-                setManualWorkout((prev) => ({ ...prev, name: event.target.value }))
-              }
-              placeholder="Workout name"
-              className="rounded-lg border border-day-border bg-day-card px-3 py-2 text-day-text-primary focus:border-transparent focus:outline-none focus:ring-2 focus:ring-day-accent-primary dark:border-night-border dark:bg-night-card dark:text-night-text-primary dark:focus:ring-night-accent"
-            />
-            <select
-              value={manualWorkout.type}
-              onChange={(event) =>
-                setManualWorkout((prev) => ({ ...prev, type: event.target.value }))
-              }
-              className="rounded-lg border border-day-border bg-day-card px-3 py-2 text-day-text-primary dark:border-night-border dark:bg-night-card dark:text-night-text-primary"
+          <div className="mt-4 space-y-3 text-sm text-day-text-secondary dark:text-night-text-secondary">
+            <p>
+              Workout analytics on this page are generated automatically from completed
+              workout sessions.
+            </p>
+            <p>
+              Source tables: <code>workout_logs</code>, <code>workout_log_exercises</code>,{" "}
+              <code>workout_log_sets</code>, and <code>personal_records</code>.
+            </p>
+            <Link
+              href="/dashboard/workout-session"
+              className="inline-flex rounded-lg bg-day-accent-primary px-4 py-2 text-sm font-semibold text-white dark:bg-night-accent"
             >
-              <option>Strength</option>
-              <option>Cardio</option>
-              <option>Mobility</option>
-              <option>HIIT</option>
-            </select>
-            <input
-              value={manualWorkout.duration}
-              onChange={(event) =>
-                setManualWorkout((prev) => ({ ...prev, duration: event.target.value }))
-              }
-              placeholder="Duration (min)"
-              className="rounded-lg border border-day-border bg-day-card px-3 py-2 text-day-text-primary focus:border-transparent focus:outline-none focus:ring-2 focus:ring-day-accent-primary dark:border-night-border dark:bg-night-card dark:text-night-text-primary dark:focus:ring-night-accent"
-            />
-            <input
-              value={manualWorkout.calories}
-              onChange={(event) =>
-                setManualWorkout((prev) => ({ ...prev, calories: event.target.value }))
-              }
-              placeholder="Calories"
-              className="rounded-lg border border-day-border bg-day-card px-3 py-2 text-day-text-primary focus:border-transparent focus:outline-none focus:ring-2 focus:ring-day-accent-primary dark:border-night-border dark:bg-night-card dark:text-night-text-primary dark:focus:ring-night-accent"
-            />
-            <input
-              value={manualWorkout.exercise}
-              onChange={(event) =>
-                setManualWorkout((prev) => ({ ...prev, exercise: event.target.value }))
-              }
-              placeholder="Exercise"
-              className="rounded-lg border border-day-border bg-day-card px-3 py-2 text-day-text-primary focus:border-transparent focus:outline-none focus:ring-2 focus:ring-day-accent-primary dark:border-night-border dark:bg-night-card dark:text-night-text-primary dark:focus:ring-night-accent"
-            />
-            <input
-              value={manualWorkout.sets}
-              onChange={(event) =>
-                setManualWorkout((prev) => ({ ...prev, sets: event.target.value }))
-              }
-              placeholder="Sets"
-              className="rounded-lg border border-day-border bg-day-card px-3 py-2 text-day-text-primary focus:border-transparent focus:outline-none focus:ring-2 focus:ring-day-accent-primary dark:border-night-border dark:bg-night-card dark:text-night-text-primary dark:focus:ring-night-accent"
-            />
-            <input
-              value={manualWorkout.reps}
-              onChange={(event) =>
-                setManualWorkout((prev) => ({ ...prev, reps: event.target.value }))
-              }
-              placeholder="Reps"
-              className="rounded-lg border border-day-border bg-day-card px-3 py-2 text-day-text-primary focus:border-transparent focus:outline-none focus:ring-2 focus:ring-day-accent-primary dark:border-night-border dark:bg-night-card dark:text-night-text-primary dark:focus:ring-night-accent"
-            />
-            <input
-              value={manualWorkout.weightPerSet}
-              onChange={(event) =>
-                setManualWorkout((prev) => ({
-                  ...prev,
-                  weightPerSet: event.target.value,
-                }))
-              }
-              placeholder="Weight per set (kg)"
-              className="rounded-lg border border-day-border bg-day-card px-3 py-2 text-day-text-primary focus:border-transparent focus:outline-none focus:ring-2 focus:ring-day-accent-primary dark:border-night-border dark:bg-night-card dark:text-night-text-primary dark:focus:ring-night-accent"
-            />
-          </div>
-          <div className="mt-4 flex flex-wrap items-center gap-3">
-            <button
-              onClick={handleWorkoutLog}
-              className="rounded-lg bg-day-accent-primary px-4 py-2 text-sm font-semibold text-white dark:bg-night-accent"
-            >
-              Log Workout
-            </button>
-            {logStatus ? (
-              <span className="text-sm text-emerald-600 dark:text-emerald-300">
-                {logStatus}
-              </span>
-            ) : null}
-            {logError ? <span className="text-sm text-rose-500">{logError}</span> : null}
+              Start Workout Session
+            </Link>
           </div>
         </div>
       </motion.section>
@@ -645,7 +527,7 @@ export default function ProgressPage() {
           <div className="min-h-[260px] rounded-xl border border-day-border bg-day-hover p-4 dark:border-night-border dark:bg-night-hover">
             <div className="flex items-center gap-2 text-sm font-semibold text-day-text-primary dark:text-night-text-primary">
               <Flame className="h-4 w-4 text-day-accent-secondary dark:text-night-accent" />
-              Calories burned
+              Volume progression (kg)
             </div>
             <div className="mt-3 h-56 min-h-[200px]">
               <ResponsiveContainer width="100%" height="100%">
@@ -656,7 +538,7 @@ export default function ProgressPage() {
                   <Tooltip />
                   <Line
                     type="monotone"
-                    dataKey="calories"
+                    dataKey="volume"
                     stroke="var(--color-day-accent-secondary)"
                     strokeWidth={3}
                     dot={false}
@@ -669,7 +551,7 @@ export default function ProgressPage() {
           <div className="min-h-[260px] rounded-xl border border-day-border bg-day-hover p-4 dark:border-night-border dark:bg-night-hover">
             <div className="flex items-center gap-2 text-sm font-semibold text-day-text-primary dark:text-night-text-primary">
               <Bolt className="h-4 w-4 text-amber-500" />
-              Active minutes
+              Training consistency (%)
             </div>
             <div className="mt-3 h-56 min-h-[200px]">
               <ResponsiveContainer width="100%" height="100%">
@@ -680,7 +562,7 @@ export default function ProgressPage() {
                   <Tooltip />
                   <Line
                     type="monotone"
-                    dataKey="minutes"
+                    dataKey="consistency"
                     stroke="#10b981"
                     strokeWidth={3}
                     dot={false}

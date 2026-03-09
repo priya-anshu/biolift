@@ -14,7 +14,6 @@ import {
   Zap,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { supabase } from "@/lib/supabase/client";
 import { useAuth } from "@/lib/auth/AuthContext";
 
 type LeaderboardRow = {
@@ -49,23 +48,6 @@ type RawLeaderboardRow = Omit<LeaderboardRow, "profiles"> & {
       }
     | null;
 };
-
-type RankingWorkout = {
-  id: string;
-  type: string | null;
-  duration_minutes: number | null;
-  calories: number | null;
-  performed_at: string;
-};
-
-type RankingProgress = {
-  id: string;
-  metric: string;
-  value: number;
-  recorded_at: string;
-};
-
-type RankingCorrectionTable = "progress_entries" | "workouts";
 
 const sortOptions = [
   { key: "total_score", label: "Overall", icon: Trophy },
@@ -112,103 +94,6 @@ function formatScore(value: number | null | undefined) {
   return Number(value).toFixed(0);
 }
 
-function calculateStreak(daySet: Set<string>) {
-  if (daySet.size === 0) return 0;
-  const latestDay = Array.from(daySet).sort().at(-1);
-  if (!latestDay) return 0;
-
-  let streak = 0;
-  const cursor = new Date(`${latestDay}T00:00:00Z`);
-
-  while (true) {
-    const key = cursor.toISOString().slice(0, 10);
-    if (!daySet.has(key)) break;
-    streak += 1;
-    cursor.setUTCDate(cursor.getUTCDate() - 1);
-  }
-
-  return streak;
-}
-
-function getTierByScore(totalScore: number) {
-  if (totalScore >= 750) return "Diamond";
-  if (totalScore >= 550) return "Platinum";
-  if (totalScore >= 350) return "Gold";
-  if (totalScore >= 200) return "Silver";
-  return "Bronze";
-}
-
-function buildLiveScores(
-  workouts: RankingWorkout[],
-  progress: RankingProgress[],
-  activityDays: number,
-  streakDays: number,
-) {
-  const strengthWorkouts = workouts.filter((workout) => {
-    const type = (workout.type ?? "").toLowerCase();
-    return type.includes("strength") || type.includes("upper") || type.includes("lower");
-  });
-  const cardioWorkouts = workouts.filter((workout) => {
-    const type = (workout.type ?? "").toLowerCase();
-    return type.includes("cardio") || type.includes("hiit") || type.includes("run");
-  });
-
-  const strengthCalories = strengthWorkouts.reduce(
-    (sum, workout) => sum + Number(workout.calories ?? 0),
-    0,
-  );
-  const cardioMinutes = cardioWorkouts.reduce(
-    (sum, workout) => sum + Number(workout.duration_minutes ?? 0),
-    0,
-  );
-
-  const heartEntries = progress.filter((entry) => entry.metric === "heart_rate");
-  const avgHeartRate = heartEntries.length
-    ? heartEntries.reduce((sum, entry) => sum + Number(entry.value), 0) /
-      heartEntries.length
-    : 0;
-
-  const weightEntries = progress
-    .filter((entry) => entry.metric === "body_weight")
-    .sort((a, b) => a.recorded_at.localeCompare(b.recorded_at));
-
-  const weightDelta =
-    weightEntries.length >= 2
-      ? Number(weightEntries[0].value) - Number(weightEntries[weightEntries.length - 1].value)
-      : 0;
-
-  const strengthScore = Math.round(
-    Math.min(1000, strengthCalories * 0.2 + strengthWorkouts.length * 20),
-  );
-  const staminaScore = Math.round(
-    Math.min(1000, cardioMinutes * 1.2 + avgHeartRate * 0.4),
-  );
-  const consistencyScore = Math.round(
-    Math.min(1000, activityDays * 40 + streakDays * 25),
-  );
-  const improvementScore = Math.round(
-    Math.min(
-      1000,
-      Math.max(0, weightDelta) * 60 + Math.min(workouts.length, 30) * 8,
-    ),
-  );
-
-  const totalScore = Math.round(
-    strengthScore * 0.35 +
-      staminaScore * 0.25 +
-      consistencyScore * 0.25 +
-      improvementScore * 0.15,
-  );
-
-  return {
-    strengthScore,
-    staminaScore,
-    consistencyScore,
-    improvementScore,
-    totalScore,
-    tier: getTierByScore(totalScore),
-  };
-}
 
 export default function RankingPage() {
   const { user } = useAuth();
@@ -221,15 +106,6 @@ export default function RankingPage() {
   const [error, setError] = useState<string | null>(null);
   const [activityDays, setActivityDays] = useState(0);
   const [streakDays, setStreakDays] = useState(0);
-  const [recentProgress, setRecentProgress] = useState<RankingProgress[]>([]);
-  const [recentWorkouts, setRecentWorkouts] = useState<RankingWorkout[]>([]);
-  const [correctionTable, setCorrectionTable] =
-    useState<RankingCorrectionTable>("progress_entries");
-  const [correctionRecordId, setCorrectionRecordId] = useState("");
-  const [correctionReason, setCorrectionReason] = useState("");
-  const [correctionSubmitting, setCorrectionSubmitting] = useState(false);
-  const [correctionStatus, setCorrectionStatus] = useState<string | null>(null);
-  const [correctionError, setCorrectionError] = useState<string | null>(null);
 
   useEffect(() => {
     const load = async () => {
@@ -239,154 +115,54 @@ export default function RankingPage() {
       if (!user) {
         setProfileId(null);
         setLeaderboard([]);
+        setActivityDays(0);
+        setStreakDays(0);
         setLoading(false);
         return;
       }
 
-      let resolvedProfileId: string | null = null;
-
-      const byAuthUser = await supabase
-        .from("profiles")
-        .select("id")
-        .eq("auth_user_id", user.id)
-        .maybeSingle();
-
-      if (!byAuthUser.error) {
-        resolvedProfileId = byAuthUser.data?.id ?? null;
-      } else {
-        const byId = await supabase
-          .from("profiles")
-          .select("id")
-          .eq("id", user.id)
-          .maybeSingle();
-        resolvedProfileId = byId.data?.id ?? null;
-      }
-
-      setProfileId(resolvedProfileId);
-
-      const now = new Date();
-      const fourteenDayStart = new Date(now);
-      fourteenDayStart.setUTCHours(0, 0, 0, 0);
-      fourteenDayStart.setUTCDate(fourteenDayStart.getUTCDate() - 13);
-      const fourteenDayStartKey = fourteenDayStart.toISOString().slice(0, 10);
-
-      const thirtyDayStart = new Date(now);
-      thirtyDayStart.setUTCHours(0, 0, 0, 0);
-      thirtyDayStart.setUTCDate(thirtyDayStart.getUTCDate() - 29);
-
-      const leaderboardPromise = supabase
-        .from("leaderboard")
-        .select(
-          "id,user_id,total_score,strength_score,stamina_score,consistency_score,improvement_score,tier,position,updated_at,profiles(name,email,avatar_url)",
-        )
-        .order("total_score", { ascending: false })
-        .limit(100);
-
-      const progressPromise = resolvedProfileId
-        ? supabase
-            .from("progress_entries")
-            .select("id,metric,value,recorded_at")
-            .eq("user_id", resolvedProfileId)
-            .gte("recorded_at", thirtyDayStart.toISOString())
-            .order("recorded_at", { ascending: false })
-        : Promise.resolve({ data: null, error: null } as const);
-
-      const workoutsPromise = resolvedProfileId
-        ? supabase
-            .from("workouts")
-            .select("id,type,duration_minutes,calories,performed_at")
-            .eq("user_id", resolvedProfileId)
-            .gte("performed_at", thirtyDayStart.toISOString())
-            .order("performed_at", { ascending: false })
-        : Promise.resolve({ data: null, error: null } as const);
-
-      const [lbRes, progressRes, workoutsRes] = await Promise.all([
-        leaderboardPromise,
-        progressPromise,
-        workoutsPromise,
-      ]);
-
-      const workoutRows = (workoutsRes.data ?? []) as RankingWorkout[];
-      const progressRows = (progressRes.data ?? []) as RankingProgress[];
-      setRecentWorkouts(workoutRows.slice(0, 15));
-      setRecentProgress(progressRows.slice(0, 15));
-      const daySet = new Set<string>();
-
-      progressRows.forEach((entry) => {
-        const key = String(entry.recorded_at).slice(0, 10);
-        if (key >= fourteenDayStartKey) daySet.add(key);
-      });
-      workoutRows.forEach((entry) => {
-        const key = String(entry.performed_at).slice(0, 10);
-        if (key >= fourteenDayStartKey) daySet.add(key);
-      });
-
-      const liveActivityDays = daySet.size;
-      const liveStreakDays = calculateStreak(daySet);
-      setActivityDays(liveActivityDays);
-      setStreakDays(liveStreakDays);
-
-      if (lbRes.error) {
-        setError("Leaderboard is not ready yet. Add scores to see rankings.");
-        setLeaderboard([]);
-      } else {
-        const normalized: LeaderboardRow[] = ((lbRes.data ?? []) as RawLeaderboardRow[]).map(
-          (row) => ({
-            ...row,
-            profiles: Array.isArray(row.profiles)
-              ? row.profiles[0] ?? null
-              : row.profiles,
-          }),
-        );
-
-        if (resolvedProfileId) {
-          const liveScores = buildLiveScores(
-            workoutRows,
-            progressRows,
-            liveActivityDays,
-            liveStreakDays,
-          );
-
-          const existingIndex = normalized.findIndex(
-            (entry) => entry.user_id === resolvedProfileId,
-          );
-          const existing = existingIndex >= 0 ? normalized[existingIndex] : null;
-
-          const myLiveRow: LeaderboardRow = {
-            id: existing?.id ?? `local-${resolvedProfileId}`,
-            user_id: resolvedProfileId,
-            total_score: liveScores.totalScore,
-            strength_score: liveScores.strengthScore,
-            stamina_score: liveScores.staminaScore,
-            consistency_score: liveScores.consistencyScore,
-            improvement_score: liveScores.improvementScore,
-            tier: liveScores.tier,
-            position: existing?.position ?? null,
-            updated_at: new Date().toISOString(),
-            profiles: existing?.profiles ?? {
-              name:
-                user.user_metadata?.name ??
-                user.user_metadata?.full_name ??
-                user.email ??
-                "You",
-              email: user.email ?? null,
-              avatar_url: user.user_metadata?.avatar_url ?? null,
-            },
-          };
-
-          if (existingIndex >= 0) {
-            normalized[existingIndex] = myLiveRow;
-          } else {
-            normalized.unshift(myLiveRow);
-          }
+      try {
+        const response = await fetch("/api/ranking/overview", { cache: "no-store" });
+        const payload = (await response.json()) as {
+          leaderboard?: RawLeaderboardRow[];
+          myEntry?: LeaderboardRow | null;
+          profileId?: string;
+          activityDays?: number;
+          streakDays?: number;
+          error?: string;
+        };
+        if (!response.ok) {
+          throw new Error(payload.error ?? "Failed to load ranking data");
         }
 
+        const normalized: LeaderboardRow[] = (payload.leaderboard ?? []).map((row) => ({
+          ...row,
+          profiles: Array.isArray(row.profiles) ? row.profiles[0] ?? null : row.profiles,
+        }));
         setLeaderboard(normalized);
+        setProfileId(
+          typeof payload.profileId === "string"
+            ? payload.profileId
+            : payload.myEntry?.user_id ?? null,
+        );
+        setActivityDays(Number(payload.activityDays ?? 0));
+        setStreakDays(Number(payload.streakDays ?? 0));
+      } catch (loadError) {
+        setLeaderboard([]);
+        setProfileId(null);
+        setActivityDays(0);
+        setStreakDays(0);
+        setError(
+          loadError instanceof Error
+            ? loadError.message
+            : "Failed to load ranking overview",
+        );
+      } finally {
+        setLoading(false);
       }
-      setLoading(false);
     };
 
-    load();
+    void load();
   }, [user]);
 
   const filtered = useMemo(() => {
@@ -413,68 +189,6 @@ export default function RankingPage() {
 
   const topThree = filtered.slice(0, 3);
   const fairPlayReady = activityDays >= 14;
-  const correctionRecordOptions = useMemo(() => {
-    if (correctionTable === "progress_entries") {
-      return recentProgress.map((entry) => ({
-        id: entry.id,
-        label: `${entry.metric} - ${String(entry.recorded_at).slice(0, 10)}`,
-      }));
-    }
-    return recentWorkouts.map((entry) => ({
-      id: entry.id,
-      label: `${entry.type ?? "Workout"} - ${String(entry.performed_at).slice(0, 10)}`,
-    }));
-  }, [correctionTable, recentProgress, recentWorkouts]);
-
-  useEffect(() => {
-    if (correctionRecordOptions.length === 0) {
-      setCorrectionRecordId("");
-      return;
-    }
-    const exists = correctionRecordOptions.some(
-      (option) => option.id === correctionRecordId,
-    );
-    if (!exists) {
-      setCorrectionRecordId(correctionRecordOptions[0].id);
-    }
-  }, [correctionRecordId, correctionRecordOptions]);
-
-  const handleCorrectionRequest = async () => {
-    setCorrectionStatus(null);
-    setCorrectionError(null);
-
-    if (!profileId) {
-      setCorrectionError("Profile not loaded. Re-login and try again.");
-      return;
-    }
-    if (!correctionRecordId) {
-      setCorrectionError("Select a record to request correction.");
-      return;
-    }
-    if (correctionReason.trim().length < 15) {
-      setCorrectionError("Reason should be at least 15 characters.");
-      return;
-    }
-
-    setCorrectionSubmitting(true);
-    const { error: requestError } = await supabase
-      .from("ranking_edit_requests")
-      .insert({
-        user_id: profileId,
-        target_table: correctionTable,
-        target_record_id: correctionRecordId,
-        reason: correctionReason.trim(),
-      });
-
-    setCorrectionSubmitting(false);
-    if (requestError) {
-      setCorrectionError(`Request failed: ${requestError.message}`);
-      return;
-    }
-
-    setCorrectionStatus("Correction request submitted for admin verification.");
-    setCorrectionReason("");
-  };
 
   return (
     <div className="space-y-8 text-day-text-primary dark:text-night-text-primary">
@@ -487,7 +201,7 @@ export default function RankingPage() {
         <div>
           <h1 className="text-2xl font-semibold">Smart Ranking</h1>
           <p className="mt-1 text-sm text-day-text-secondary dark:text-night-text-secondary">
-            Daily ranking updates. Fair-play lock after 14 active days.
+            Daily ranking updates driven by completed training data.
           </p>
         </div>
         <div className="relative w-full max-w-sm">
@@ -546,7 +260,7 @@ export default function RankingPage() {
               Fair-Play Window
             </div>
             <div className="text-day-text-secondary dark:text-night-text-secondary">
-              Rankings refresh daily. After 14 active days, score corrections require verification.
+              Rankings refresh daily from workout execution, PRs, and progress tracking.
             </div>
           </div>
           <span
@@ -635,7 +349,7 @@ export default function RankingPage() {
         })}
         {topThree.length === 0 && !loading ? (
           <div className="col-span-full rounded-2xl border border-day-border bg-day-card p-6 text-sm text-day-text-secondary dark:border-night-border dark:bg-night-card dark:text-night-text-secondary">
-            No rankings yet. Add workouts and progress entries to populate the leaderboard.
+            No rankings yet. Complete workout sessions and log progress entries to populate the leaderboard.
           </div>
         ) : null}
       </motion.section>
@@ -767,7 +481,7 @@ export default function RankingPage() {
               </div>
             ) : (
               <div className="mt-4 text-sm text-day-text-secondary dark:text-night-text-secondary">
-                No ranking yet. Start logging workouts to appear here.
+                No ranking yet. Complete workouts to appear here.
               </div>
             )}
           </div>
@@ -780,96 +494,16 @@ export default function RankingPage() {
             <ul className="mt-4 space-y-3 text-sm text-day-text-secondary dark:text-night-text-secondary">
               <li>Global rank updates daily using the latest logged data.</li>
               <li>Consistency score uses activity days + streak quality.</li>
-              <li>After 14 active days, corrections should go through verification review.</li>
+              <li>Leaderboard recalculates after completed workouts and manual logs.</li>
             </ul>
           </div>
 
           <div className="rounded-2xl border border-day-border bg-day-card p-5 shadow-card dark:border-night-border dark:bg-night-card dark:shadow-card-dark">
-            <div className="flex items-center justify-between gap-2">
-              <div className="text-sm font-semibold">Request Score Correction</div>
-              <span className="rounded-full bg-day-hover px-2 py-0.5 text-[11px] font-semibold text-day-text-secondary dark:bg-night-hover dark:text-night-text-secondary">
-                Verification
-              </span>
-            </div>
+            <div className="text-sm font-semibold">Score Source</div>
             <p className="mt-2 text-xs text-day-text-secondary dark:text-night-text-secondary">
-              Use this when a ranking-impacting entry needs correction. Admin review required.
+              Scores are derived from completed workout sessions, set-level volume,
+              personal records, and tracked progress entries.
             </p>
-
-            <div className="mt-4 space-y-3 text-sm">
-              <label className="block">
-                <span className="mb-1 block text-xs text-day-text-secondary dark:text-night-text-secondary">
-                  Data type
-                </span>
-                <select
-                  value={correctionTable}
-                  onChange={(event) =>
-                    setCorrectionTable(event.target.value as RankingCorrectionTable)
-                  }
-                  className="w-full rounded-lg border border-day-border bg-day-card px-3 py-2 text-day-text-primary focus:border-transparent focus:outline-none focus:ring-2 focus:ring-day-accent-primary dark:border-night-border dark:bg-night-card dark:text-night-text-primary dark:focus:ring-night-accent"
-                >
-                  <option value="progress_entries">Progress Entries</option>
-                  <option value="workouts">Workouts</option>
-                </select>
-              </label>
-
-              <label className="block">
-                <span className="mb-1 block text-xs text-day-text-secondary dark:text-night-text-secondary">
-                  Record
-                </span>
-                <select
-                  value={correctionRecordId}
-                  onChange={(event) => setCorrectionRecordId(event.target.value)}
-                  className="w-full rounded-lg border border-day-border bg-day-card px-3 py-2 text-day-text-primary focus:border-transparent focus:outline-none focus:ring-2 focus:ring-day-accent-primary dark:border-night-border dark:bg-night-card dark:text-night-text-primary dark:focus:ring-night-accent"
-                >
-                  {correctionRecordOptions.length === 0 ? (
-                    <option value="">No records available</option>
-                  ) : (
-                    correctionRecordOptions.map((option) => (
-                      <option key={option.id} value={option.id}>
-                        {option.label}
-                      </option>
-                    ))
-                  )}
-                </select>
-              </label>
-
-              <label className="block">
-                <span className="mb-1 block text-xs text-day-text-secondary dark:text-night-text-secondary">
-                  Reason
-                </span>
-                <textarea
-                  value={correctionReason}
-                  onChange={(event) => setCorrectionReason(event.target.value)}
-                  placeholder="Explain what is wrong and what should be corrected."
-                  rows={3}
-                  className="w-full rounded-lg border border-day-border bg-day-card px-3 py-2 text-day-text-primary placeholder-day-text-secondary focus:border-transparent focus:outline-none focus:ring-2 focus:ring-day-accent-primary dark:border-night-border dark:bg-night-card dark:text-night-text-primary dark:placeholder-night-text-secondary dark:focus:ring-night-accent"
-                />
-              </label>
-            </div>
-
-            {correctionError ? (
-              <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-900/50 dark:bg-red-900/20 dark:text-red-200">
-                {correctionError}
-              </div>
-            ) : null}
-            {correctionStatus ? (
-              <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700 dark:border-emerald-900/50 dark:bg-emerald-900/20 dark:text-emerald-300">
-                {correctionStatus}
-              </div>
-            ) : null}
-
-            <button
-              type="button"
-              onClick={handleCorrectionRequest}
-              disabled={
-                correctionSubmitting ||
-                !profileId ||
-                correctionRecordOptions.length === 0
-              }
-              className="mt-4 w-full rounded-lg bg-day-accent-primary px-4 py-2 text-sm font-semibold text-white transition hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-night-accent"
-            >
-              {correctionSubmitting ? "Submitting..." : "Submit Correction Request"}
-            </button>
           </div>
         </div>
       </motion.section>

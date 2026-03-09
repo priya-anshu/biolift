@@ -26,8 +26,10 @@ import {
 import { useAuth } from "@/lib/auth/AuthContext";
 import { useTheme } from "@/lib/theme/ThemeContext";
 import { useEffect, useRef, useState } from "react";
-import { supabase } from "@/lib/supabase/client";
 import { useRouter } from "next/navigation";
+
+const ENABLE_SOCIAL_NAV = process.env.NEXT_PUBLIC_FEATURE_SOCIAL === "true";
+const ENABLE_SHOP_NAV = process.env.NEXT_PUBLIC_FEATURE_SHOP === "true";
 
 export default function DashboardHeader() {
   const { user, signOut } = useAuth();
@@ -36,45 +38,7 @@ export default function DashboardHeader() {
   const pathname = usePathname();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
-  const [profileName, setProfileName] = useState<string | null>(null);
-  const [profileEmail, setProfileEmail] = useState<string | null>(null);
-  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
-  const [profileLevel, setProfileLevel] = useState<string | null>(null);
-  const [profilePoints, setProfilePoints] = useState<number | null>(null);
   const userMenuRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (!user) return;
-    const loadProfile = async () => {
-      const byAuthUser = await supabase
-        .from("profiles")
-        .select("name,email,avatar_url")
-        .eq("auth_user_id", user.id)
-        .maybeSingle();
-
-      let profile = byAuthUser.data;
-      if (!profile && user.email) {
-        const byEmail = await supabase
-          .from("profiles")
-          .select("name,email,avatar_url")
-          .ilike("email", user.email)
-          .maybeSingle();
-        profile = byEmail.data;
-      }
-
-      setProfileName(profile?.name ?? null);
-      setProfileEmail(profile?.email ?? user.email ?? null);
-      setAvatarUrl(
-        profile?.avatar_url ??
-          (user.user_metadata?.avatar_url as string | undefined) ??
-          (user.user_metadata?.picture as string | undefined) ??
-          null,
-      );
-      setProfileLevel((user.user_metadata?.level as string | undefined) ?? null);
-      setProfilePoints((user.user_metadata?.points as number | undefined) ?? null);
-    };
-    loadProfile();
-  }, [user]);
 
   useEffect(() => {
     if (!isUserMenuOpen) return;
@@ -95,12 +59,20 @@ export default function DashboardHeader() {
     router.replace("/signin");
   };
 
-  const displayName =
-    profileName ??
-    user?.user_metadata?.name ??
-    user?.user_metadata?.full_name ??
-    (profileEmail ?? user?.email ?? "Member");
-  const displayEmail = profileEmail ?? user?.email ?? "Member";
+  const profileName =
+    (user?.user_metadata?.name as string | undefined) ??
+    (user?.user_metadata?.full_name as string | undefined) ??
+    null;
+  const profileEmail = user?.email ?? null;
+  const avatarUrl =
+    (user?.user_metadata?.avatar_url as string | undefined) ??
+    (user?.user_metadata?.picture as string | undefined) ??
+    null;
+  const profileLevel = (user?.user_metadata?.level as string | undefined) ?? null;
+  const profilePoints = (user?.user_metadata?.points as number | undefined) ?? null;
+
+  const displayName = profileName ?? profileEmail ?? "Member";
+  const displayEmail = profileEmail ?? "Member";
   const initials = displayName
     .split(" ")
     .map((word: string) => word[0])
@@ -109,13 +81,15 @@ export default function DashboardHeader() {
     .toUpperCase();
   const navItems = [
     { href: "/dashboard", label: "Dashboard", icon: LayoutGrid },
-    { href: "/dashboard/workout-planner", label: "Workout", icon: Dumbbell },
-    { href: "/dashboard/ranking", label: "Ranking", icon: Trophy },
+    { href: "/dashboard/workout-session", label: "Workout", icon: Dumbbell },
     { href: "/dashboard/progress", label: "Progress", icon: LineChart },
+    { href: "/dashboard/ranking", label: "Ranking", icon: Trophy },
     { href: "/dashboard/diet", label: "Diet", icon: Apple },
-    { href: "/dashboard/social", label: "Social", icon: Users },
-    { href: "/dashboard/shop", label: "Shop", icon: ShoppingBag },
     { href: "/dashboard/profile", label: "Profile", icon: User },
+    ...(ENABLE_SOCIAL_NAV ? [{ href: "/dashboard/social", label: "Social", icon: Users }] : []),
+    ...(ENABLE_SHOP_NAV
+      ? [{ href: "/dashboard/shop", label: "Shop", icon: ShoppingBag }]
+      : []),
   ];
 
   return (

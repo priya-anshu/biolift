@@ -141,6 +141,8 @@ export default function WorkoutSessionPage() {
   const [exercises, setExercises] = useState<SessionExercise[]>([]);
   const [setDrafts, setSetDrafts] = useState<Record<string, SetDraft[]>>({});
   const [activeExerciseId, setActiveExerciseId] = useState<string | null>(null);
+  const [warmupCompleted, setWarmupCompleted] = useState(false);
+  const [cooldownCompleted, setCooldownCompleted] = useState(false);
   const [restSeconds, setRestSeconds] = useState(0);
   const [restRunning, setRestRunning] = useState(false);
   const [prBadge, setPrBadge] = useState<PersonalRecordBadge | null>(null);
@@ -154,6 +156,40 @@ export default function WorkoutSessionPage() {
     const pct = targetSets > 0 ? (doneSets / targetSets) * 100 : 0;
     return { targetSets, doneSets, pct };
   }, [exercises]);
+
+  const canStartExercises = warmupCompleted;
+  const allExercisesCompleted = exercises.length > 0 && exercises.every((row) => row.completed);
+  const canFinishCooldown = warmupCompleted && allExercisesCompleted;
+
+  const flowSteps = useMemo(() => {
+    const exerciseSteps = exercises.map((exercise, index) => ({
+      key: exercise.workout_log_exercise_id,
+      label: `Exercise ${index + 1}: ${exercise.exercise_name}`,
+      done: exercise.completed,
+      active: activeExerciseId === exercise.workout_log_exercise_id,
+    }));
+    return [
+      {
+        key: "warmup",
+        label: "Warmup",
+        done: warmupCompleted,
+        active: !warmupCompleted,
+      },
+      ...exerciseSteps,
+      {
+        key: "cooldown",
+        label: "Cooldown",
+        done: cooldownCompleted,
+        active: canFinishCooldown && !cooldownCompleted,
+      },
+    ];
+  }, [
+    activeExerciseId,
+    canFinishCooldown,
+    cooldownCompleted,
+    exercises,
+    warmupCompleted,
+  ]);
 
   const hydrateDrafts = useCallback(
     (
@@ -327,6 +363,8 @@ export default function WorkoutSessionPage() {
           parsedExercises[0]?.workout_log_exercise_id ??
           null,
       );
+      setWarmupCompleted(parsedExercises.some((row) => row.completed_sets > 0));
+      setCooldownCompleted((startPayload.workoutLog ?? logPayload.log)?.status === "completed");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to initialize");
     } finally {
@@ -477,6 +515,10 @@ export default function WorkoutSessionPage() {
 
   const saveSet = async (exercise: SessionExercise, row: SetDraft) => {
     if (!workoutLog || completed) return;
+    if (!canStartExercises) {
+      setError("Complete warmup before logging exercise sets.");
+      return;
+    }
     const weight = rowToNumber(row.actualWeightKg);
     const reps = rowToNumber(row.actualReps);
     const rpe = rowToNumber(row.actualRpe);
@@ -544,6 +586,10 @@ export default function WorkoutSessionPage() {
 
   const deleteSet = async (exercise: SessionExercise, row: SetDraft) => {
     if (!workoutLog || completed) return;
+    if (!canStartExercises) {
+      setError("Complete warmup before editing exercise sets.");
+      return;
+    }
     if (!row.saved) {
       setSetDrafts((prev) => {
         const current = prev[exercise.workout_log_exercise_id] ?? [];
@@ -676,7 +722,11 @@ export default function WorkoutSessionPage() {
             >
               Reload
             </Button>
-            <Button onClick={finishWorkout} loading={finishing} disabled={completed}>
+            <Button
+              onClick={finishWorkout}
+              loading={finishing}
+              disabled={completed || !cooldownCompleted}
+            >
               {completed ? "Workout Finished" : "Finish Workout"}
             </Button>
           </div>
@@ -735,10 +785,51 @@ export default function WorkoutSessionPage() {
           </div>
         </div>
 
+        <div className="mt-5">
+          <p className="text-xs font-semibold uppercase tracking-wide text-day-text-secondary dark:text-night-text-secondary">
+            Session Flow
+          </p>
+          <div className="mt-2 grid gap-2 sm:grid-cols-2">
+            {flowSteps.map((step) => (
+              <div
+                key={step.key}
+                className={`rounded-lg border px-3 py-2 text-xs font-medium ${
+                  step.done
+                    ? "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-900/20 dark:text-emerald-300"
+                    : step.active
+                      ? "border-day-accent-primary bg-sky-50 text-day-accent-primary dark:border-night-accent dark:bg-night-hover dark:text-night-accent"
+                      : "border-day-border bg-day-hover/60 text-day-text-secondary dark:border-night-border dark:bg-night-hover/40 dark:text-night-text-secondary"
+                }`}
+              >
+                {step.label}
+              </div>
+            ))}
+          </div>
+        </div>
+
         {notice ? (
           <p className="mt-3 text-sm text-emerald-600 dark:text-emerald-400">{notice}</p>
         ) : null}
         {error ? <p className="mt-2 text-sm text-red-600 dark:text-red-400">{error}</p> : null}
+      </Card>
+
+      <Card className="p-4 sm:p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-semibold">Warmup</h2>
+            <p className="text-xs text-day-text-secondary dark:text-night-text-secondary">
+              5-8 min movement prep, dynamic mobility, and ramp-up sets.
+            </p>
+          </div>
+          <Button
+            size="sm"
+            variant={warmupCompleted ? "ghost" : "primary"}
+            onClick={() => setWarmupCompleted(true)}
+            disabled={warmupCompleted}
+          >
+            {warmupCompleted ? "Warmup Complete" : "Complete Warmup"}
+          </Button>
+        </div>
       </Card>
 
       {exercises.map((exercise) => (
@@ -784,6 +875,12 @@ export default function WorkoutSessionPage() {
             </p>
           ) : null}
 
+          {!canStartExercises ? (
+            <p className="mt-2 text-xs font-medium text-amber-600 dark:text-amber-300">
+              Complete warmup to unlock set logging.
+            </p>
+          ) : null}
+
           <div className="mt-3 rounded-lg border border-day-border bg-day-hover/70 px-3 py-2 text-xs dark:border-night-border dark:bg-night-hover/50">
             Completed sets: {exercise.completed_sets}/{exercise.recommended_sets} | Total reps:{" "}
             {exercise.total_reps} | Volume: {exercise.total_volume_kg.toFixed(2)} kg
@@ -803,7 +900,7 @@ export default function WorkoutSessionPage() {
                     className="input-field md:col-span-2"
                     placeholder="Weight"
                     value={row.actualWeightKg}
-                    disabled={row.saving || completed}
+                    disabled={row.saving || completed || !canStartExercises}
                     onChange={(event) =>
                       updateRow(exercise.workout_log_exercise_id, row.setNumber, (current) => ({
                         ...current,
@@ -817,7 +914,7 @@ export default function WorkoutSessionPage() {
                     className="input-field md:col-span-2"
                     placeholder="Reps"
                     value={row.actualReps}
-                    disabled={row.saving || completed}
+                    disabled={row.saving || completed || !canStartExercises}
                     onChange={(event) =>
                       updateRow(exercise.workout_log_exercise_id, row.setNumber, (current) => ({
                         ...current,
@@ -831,7 +928,7 @@ export default function WorkoutSessionPage() {
                     className="input-field md:col-span-2"
                     placeholder="RPE (optional)"
                     value={row.actualRpe}
-                    disabled={row.saving || completed}
+                    disabled={row.saving || completed || !canStartExercises}
                     onChange={(event) =>
                       updateRow(exercise.workout_log_exercise_id, row.setNumber, (current) => ({
                         ...current,
@@ -844,7 +941,7 @@ export default function WorkoutSessionPage() {
                   <select
                     className="input-field md:col-span-2"
                     value={row.setStatus}
-                    disabled={row.saving || completed}
+                    disabled={row.saving || completed || !canStartExercises}
                     onChange={(event) =>
                       updateRow(exercise.workout_log_exercise_id, row.setNumber, (current) => ({
                         ...current,
@@ -862,7 +959,7 @@ export default function WorkoutSessionPage() {
                   <div className="flex gap-2 md:col-span-2">
                     <Button
                       size="sm"
-                      disabled={row.saving || completed}
+                      disabled={row.saving || completed || !canStartExercises}
                       icon={row.saving ? <Loader2 className="h-4 w-4 animate-spin" /> : undefined}
                       onClick={() => void saveSet(exercise, row)}
                     >
@@ -871,7 +968,7 @@ export default function WorkoutSessionPage() {
                     <Button
                       size="sm"
                       variant="ghost"
-                      disabled={row.saving || completed}
+                      disabled={row.saving || completed || !canStartExercises}
                       onClick={() => void deleteSet(exercise, row)}
                     >
                       Remove
@@ -906,7 +1003,7 @@ export default function WorkoutSessionPage() {
             <Button
               size="sm"
               variant="ghost"
-              disabled={completed}
+              disabled={completed || !canStartExercises}
               onClick={() => addSetRow(exercise)}
             >
               Add Set
@@ -914,6 +1011,30 @@ export default function WorkoutSessionPage() {
           </div>
         </Card>
       ))}
+
+      <Card className="p-4 sm:p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-semibold">Cooldown</h2>
+            <p className="text-xs text-day-text-secondary dark:text-night-text-secondary">
+              3-5 min cooldown walk, breathing reset, and mobility work.
+            </p>
+          </div>
+          <Button
+            size="sm"
+            variant={cooldownCompleted ? "ghost" : "primary"}
+            onClick={() => setCooldownCompleted(true)}
+            disabled={!canFinishCooldown || cooldownCompleted}
+          >
+            {cooldownCompleted ? "Cooldown Complete" : "Complete Cooldown"}
+          </Button>
+        </div>
+        {!canFinishCooldown && !cooldownCompleted ? (
+          <p className="mt-2 text-xs text-day-text-secondary dark:text-night-text-secondary">
+            Finish all prescribed exercises before cooldown.
+          </p>
+        ) : null}
+      </Card>
     </div>
   );
 }

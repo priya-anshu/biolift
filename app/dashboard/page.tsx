@@ -14,12 +14,9 @@ import {
   TrendingUp,
   Zap,
   CalendarDays,
-  ChevronDown,
-  ChevronUp,
 } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { supabase } from "@/lib/supabase/client";
 import { useAuth } from "@/lib/auth/AuthContext";
 
 const sectionVariants = {
@@ -48,6 +45,7 @@ type Workout = {
   duration_minutes: number | null;
   calories: number | null;
   performed_at: string;
+  status?: string;
 };
 
 type Goal = {
@@ -79,7 +77,16 @@ type MotivationResponse = {
   totalCompletedWorkouts: number;
 };
 
-type CardioTiming = "before" | "after";
+type DashboardSummaryResponse = {
+  metrics: {
+    workoutsThisPeriod: number;
+    caloriesBurned: number;
+    activeMinutes: number;
+  };
+  recentActivity: Workout[];
+  goals: Goal[];
+  heartRateAvg: number | null;
+};
 
 function formatExerciseVolume(exercise: {
   sets?: number;
@@ -101,14 +108,15 @@ function formatExerciseVolume(exercise: {
 
 export default function DashboardPage() {
   const { user } = useAuth();
-  const [profileId, setProfileId] = useState<string | null>(null);
   const [workouts, setWorkouts] = useState<Workout[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [heartRateAvg, setHeartRateAvg] = useState<number | null>(null);
+  const [summaryMetrics, setSummaryMetrics] = useState({
+    workoutsThisPeriod: 0,
+    caloriesBurned: 0,
+    activeMinutes: 0,
+  });
   const [motivation, setMotivation] = useState<MotivationResponse | null>(null);
-  const [showTodaySession, setShowTodaySession] = useState(false);
-  const [cardioTiming, setCardioTiming] = useState<CardioTiming>("after");
-  const [isCardioTimingLoaded, setIsCardioTimingLoaded] = useState(false);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -116,80 +124,46 @@ export default function DashboardPage() {
 
     const load = async () => {
       setLoading(true);
-      setIsCardioTimingLoaded(false);
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("id")
-        .eq("auth_user_id", user.id)
-        .maybeSingle();
-
-      if (!profile?.id) {
-        setLoading(false);
-        return;
-      }
-      setProfileId(profile.id);
-      const since = new Date();
-      since.setDate(since.getDate() - 7);
-
-      const [workoutsRes, goalsRes, heartRes, settingsRes] = await Promise.all([
-        supabase
-          .from("workouts")
-          .select("id,name,type,duration_minutes,calories,performed_at")
-          .eq("user_id", profile.id)
-          .order("performed_at", { ascending: false })
-          .limit(6),
-        supabase
-          .from("goals")
-          .select("id,title,current_value,target_value,unit")
-          .eq("user_id", profile.id)
-          .order("created_at", { ascending: false })
-          .limit(3),
-        supabase
-          .from("progress_entries")
-          .select("value")
-          .eq("user_id", profile.id)
-          .eq("metric", "heart_rate")
-          .gte("recorded_at", since.toISOString()),
-        supabase
-          .from("profile_settings")
-          .select("workout_cardio_timing")
-          .eq("user_id", profile.id)
-          .maybeSingle(),
+      const [summaryRes, motivationRes] = await Promise.all([
+        fetch("/api/dashboard/summary?days=7&recentLimit=6", {
+          cache: "no-store",
+        }),
+        fetch("/api/dashboard/motivation", {
+          cache: "no-store",
+        }),
       ]);
 
-      setWorkouts((workoutsRes.data as Workout[]) ?? []);
-      setGoals((goalsRes.data as Goal[]) ?? []);
-
-      if (heartRes.data && heartRes.data.length > 0) {
-        const avg =
-          heartRes.data.reduce((sum, entry) => sum + Number(entry.value), 0) /
-          heartRes.data.length;
-        setHeartRateAvg(Math.round(avg));
+      const summaryPayload = (await summaryRes.json()) as DashboardSummaryResponse & {
+        error?: string;
+      };
+      if (summaryRes.ok) {
+        setWorkouts(summaryPayload.recentActivity ?? []);
+        setGoals(summaryPayload.goals ?? []);
+        setHeartRateAvg(summaryPayload.heartRateAvg ?? null);
+        setSummaryMetrics(
+          summaryPayload.metrics ?? {
+            workoutsThisPeriod: 0,
+            caloriesBurned: 0,
+            activeMinutes: 0,
+          },
+        );
       } else {
+        setWorkouts([]);
+        setGoals([]);
         setHeartRateAvg(null);
-      }
-
-      if (!settingsRes.error) {
-        const timing =
-          (settingsRes.data as { workout_cardio_timing?: string | null } | null)
-            ?.workout_cardio_timing ?? null;
-        if (timing === "before" || timing === "after") {
-          setCardioTiming(timing);
-        }
-      }
-      setIsCardioTimingLoaded(true);
-
-      try {
-        const motivationRes = await fetch("/api/dashboard/motivation", {
-          cache: "no-store",
+        setSummaryMetrics({
+          workoutsThisPeriod: 0,
+          caloriesBurned: 0,
+          activeMinutes: 0,
         });
-        const motivationPayload = (await motivationRes.json()) as MotivationResponse & {
-          error?: string;
-        };
-        if (motivationRes.ok) {
-          setMotivation(motivationPayload);
-        }
-      } catch {}
+      }
+
+      const motivationPayload = (await motivationRes.json()) as MotivationResponse & {
+        error?: string;
+      };
+      if (motivationRes.ok) {
+        setMotivation(motivationPayload);
+      }
 
       setLoading(false);
     };
@@ -197,52 +171,9 @@ export default function DashboardPage() {
     load();
   }, [user]);
 
-  useEffect(() => {
-    if (!profileId || !isCardioTimingLoaded) return;
-
-    const persistCardioTiming = async () => {
-      const { error } = await supabase.from("profile_settings").upsert(
-        {
-          user_id: profileId,
-          workout_cardio_timing: cardioTiming,
-        },
-        { onConflict: "user_id" },
-      );
-
-      if (error && error.code !== "42703") {
-        console.error("Failed to save cardio timing preference:", error.message);
-      }
-    };
-
-    void persistCardioTiming();
-  }, [profileId, cardioTiming, isCardioTimingLoaded]);
-
-  const weeklyWorkouts = useMemo(() => {
-    if (!workouts.length) return 0;
-    const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - 7);
-    return workouts.filter(
-      (workout) => new Date(workout.performed_at) >= cutoff,
-    ).length;
-  }, [workouts]);
-
-  const caloriesBurned = useMemo(
-    () =>
-      workouts.reduce(
-        (sum, workout) => sum + (workout.calories ?? 0),
-        0,
-      ),
-    [workouts],
-  );
-
-  const activeMinutes = useMemo(
-    () =>
-      workouts.reduce(
-        (sum, workout) => sum + (workout.duration_minutes ?? 0),
-        0,
-      ),
-    [workouts],
-  );
+  const weeklyWorkouts = summaryMetrics.workoutsThisPeriod;
+  const caloriesBurned = summaryMetrics.caloriesBurned;
+  const activeMinutes = summaryMetrics.activeMinutes;
 
   const displayName = useMemo(() => {
     const metadata = user?.user_metadata as
@@ -266,33 +197,13 @@ export default function DashboardPage() {
 
   const todaySessionSections = useMemo(() => {
     const planExercises = motivation?.todayPlan?.exercises ?? [];
-    const cardioKeywords = [
-      "cardio",
-      "hiit",
-      "run",
-      "cycle",
-      "bike",
-      "treadmill",
-      "jump rope",
-    ];
-
-    const cardioExercises = planExercises.filter((exercise) =>
-      cardioKeywords.some((keyword) =>
-        exercise.exercise_name.toLowerCase().includes(keyword),
-      ),
-    );
-
-    const mainExercises = planExercises.filter((exercise) => {
-      const lower = exercise.exercise_name.toLowerCase();
-      return !cardioKeywords.some((keyword) => lower.includes(keyword));
-    });
+    const mainExercises = planExercises;
 
     const warmupSection = {
-      key: "pre",
-      title: "Warm-up / Pre-Workout Stretch",
-      subtitle: "Activation",
+      key: "warmup",
+      title: "Warmup",
+      subtitle: "Activation and prep",
       tone: "bg-emerald-50 dark:bg-emerald-900/20",
-      optional: false,
       items: [
         "5 min brisk walk",
         "Dynamic hip + shoulder mobility",
@@ -301,22 +212,20 @@ export default function DashboardPage() {
     };
 
     const mainSection = {
-      key: "main",
-      title: `${todayDayLabel} - ${motivation?.todayPlan?.name ?? "Workout Plan"}`,
-      subtitle: "Primary workout",
+      key: "exercises",
+      title: "Exercises",
+      subtitle: `${todayDayLabel} plan`,
       tone: "bg-sky-50 dark:bg-sky-900/20",
-      optional: false,
       items: mainExercises.map(
         (exercise) => `${exercise.exercise_name} - ${formatExerciseVolume(exercise)}`,
       ),
     };
 
     const postSection = {
-      key: "post",
-      title: "Post-Workout Stretch",
-      subtitle: "Cool-down",
+      key: "cooldown",
+      title: "Cooldown",
+      subtitle: "Recovery and reset",
       tone: "bg-violet-50 dark:bg-violet-900/20",
-      optional: false,
       items: [
         "3-5 min cooldown walk",
         "Hamstring + hip flexor stretch",
@@ -324,27 +233,8 @@ export default function DashboardPage() {
       ],
     };
 
-    const cardioSection = {
-      key: "cardio",
-      title: "Cardio (Optional)",
-      subtitle:
-        cardioTiming === "before"
-          ? "Scheduled before primary workout"
-          : "Scheduled after primary workout",
-      tone: "bg-amber-50 dark:bg-amber-900/20",
-      optional: true,
-      items: cardioExercises.map(
-        (exercise) => `${exercise.exercise_name} - ${formatExerciseVolume(exercise)}`,
-      ),
-    };
-
-    const ordered =
-      cardioTiming === "before"
-        ? [warmupSection, cardioSection, mainSection, postSection]
-        : [warmupSection, mainSection, postSection, cardioSection];
-
-    return ordered.filter((section) => !section.optional || section.items.length > 0);
-  }, [motivation, cardioTiming, todayDayLabel]);
+    return [warmupSection, mainSection, postSection];
+  }, [motivation, todayDayLabel]);
 
   const statCards = [
     {
@@ -408,10 +298,17 @@ export default function DashboardPage() {
                 {motivation?.todayPlan?.name ?? "No active workout plan for today"}
               </h2>
               <p className="mt-2 text-sm text-day-text-secondary dark:text-night-text-secondary">
-                Sequence: warm-up, main workout, cool-down, and optional cardio.
+                Warmup, exercises, then cooldown.
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
+              <Link
+                href="/dashboard/workout-session"
+                className="inline-flex items-center gap-2 rounded-lg bg-day-accent-primary px-4 py-2.5 text-sm font-semibold text-white shadow-glow-blue transition hover:opacity-95 dark:bg-night-accent dark:shadow-glow"
+              >
+                <Play className="h-4 w-4" />
+                Start Workout
+              </Link>
               <Link
                 href="/dashboard/workout-planner"
                 className="inline-flex items-center gap-2 rounded-lg border border-day-border px-3 py-2 text-sm font-semibold text-day-text-secondary hover:bg-day-hover dark:border-night-border dark:text-night-text-secondary dark:hover:bg-night-hover"
@@ -419,87 +316,43 @@ export default function DashboardPage() {
                 <CalendarDays className="h-4 w-4" />
                 Open Planner
               </Link>
-              <div className="inline-flex overflow-hidden rounded-lg border border-day-border dark:border-night-border">
-                <button
-                  onClick={() => setCardioTiming("before")}
-                  className={`px-3 py-2 text-xs font-semibold transition ${
-                    cardioTiming === "before"
-                      ? "bg-day-accent-primary text-white dark:bg-night-accent"
-                      : "text-day-text-secondary hover:bg-day-hover dark:text-night-text-secondary dark:hover:bg-night-hover"
-                  }`}
-                >
-                  Cardio First
-                </button>
-                <button
-                  onClick={() => setCardioTiming("after")}
-                  className={`px-3 py-2 text-xs font-semibold transition ${
-                    cardioTiming === "after"
-                      ? "bg-day-accent-primary text-white dark:bg-night-accent"
-                      : "text-day-text-secondary hover:bg-day-hover dark:text-night-text-secondary dark:hover:bg-night-hover"
-                  }`}
-                >
-                  Cardio Last
-                </button>
-              </div>
-              <button
-                onClick={() => setShowTodaySession((previous) => !previous)}
-                className="inline-flex items-center gap-2 rounded-lg border border-day-border px-3 py-2 text-sm font-semibold text-day-text-secondary transition hover:bg-day-hover dark:border-night-border dark:text-night-text-secondary dark:hover:bg-night-hover"
-              >
-                {showTodaySession ? (
-                  <>
-                    <ChevronUp className="h-4 w-4" />
-                    Hide details
-                  </>
-                ) : (
-                  <>
-                    <ChevronDown className="h-4 w-4" />
-                    View more
-                  </>
-                )}
-              </button>
             </div>
           </div>
 
-          {showTodaySession ? (
-            <div className="mt-4 space-y-3">
-              {todaySessionSections.map((section, index) => (
-                <div
-                  key={`expanded-${section.key}`}
-                  className={`rounded-xl border border-day-border p-4 dark:border-night-border ${section.tone}`}
-                >
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <h3 className="text-sm font-semibold">
-                      {index + 1}. {section.title}
-                    </h3>
-                    <span className="text-xs text-day-text-secondary dark:text-night-text-secondary">
-                      {section.subtitle}
-                    </span>
-                  </div>
-
-                  <ul className="mt-2 space-y-1.5 text-sm text-day-text-secondary dark:text-night-text-secondary">
-                    {section.items.length > 0 ? (
-                      section.items.map((item) => (
-                        <li key={`${section.key}-${item}`} className="flex gap-2">
-                          <span className="mt-1 inline-block h-1.5 w-1.5 rounded-full bg-day-accent-primary dark:bg-night-accent" />
-                          <span>{item}</span>
-                        </li>
-                      ))
-                    ) : (
-                      <li className="text-xs">
-                        {section.key === "main"
-                          ? "No exercises scheduled for this day."
-                          : "No items configured for this section."}
-                      </li>
-                    )}
-                  </ul>
+          <div className="mt-4 space-y-3">
+            {todaySessionSections.map((section, index) => (
+              <div
+                key={`session-${section.key}`}
+                className={`rounded-xl border border-day-border p-4 dark:border-night-border ${section.tone}`}
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h3 className="text-sm font-semibold">
+                    {index + 1}. {section.title}
+                  </h3>
+                  <span className="text-xs text-day-text-secondary dark:text-night-text-secondary">
+                    {section.subtitle}
+                  </span>
                 </div>
-              ))}
-            </div>
-          ) : (
-            <p className="mt-4 text-sm text-day-text-secondary dark:text-night-text-secondary">
-              Click &quot;View more&quot; to open the full session sequence.
-            </p>
-          )}
+
+                <ul className="mt-2 space-y-1.5 text-sm text-day-text-secondary dark:text-night-text-secondary">
+                  {section.items.length > 0 ? (
+                    section.items.map((item) => (
+                      <li key={`${section.key}-${item}`} className="flex gap-2">
+                        <span className="mt-1 inline-block h-1.5 w-1.5 rounded-full bg-day-accent-primary dark:bg-night-accent" />
+                        <span>{item}</span>
+                      </li>
+                    ))
+                  ) : (
+                    <li className="text-xs">
+                      {section.key === "exercises"
+                        ? "No exercises scheduled for this day."
+                        : "No items configured for this section."}
+                    </li>
+                  )}
+                </ul>
+              </div>
+            ))}
+          </div>
         </motion.section>
 
         {motivation ? (
@@ -604,7 +457,7 @@ export default function DashboardPage() {
               Begin your next training session with AI-powered guidance
             </p>
             <Link
-              href="/dashboard/workout-planner"
+              href="/dashboard/workout-session"
               className="mt-6 inline-flex rounded-lg border border-white/40 px-4 py-2 text-sm font-semibold"
             >
               Start Now

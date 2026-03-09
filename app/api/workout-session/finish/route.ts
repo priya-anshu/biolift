@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getWorkoutPlannerApiContext } from "@/lib/workout-planner/apiContext";
-import { upsertCalendarStatus } from "@/lib/workout-planner/service";
+import {
+  refreshLeaderboardForUser,
+  upsertCalendarStatus,
+} from "@/lib/workout-planner/service";
 
 type FinishPayload = {
   workoutLogId?: unknown;
@@ -178,6 +181,11 @@ export async function POST(request: NextRequest) {
         notes: parsed.notes ?? undefined,
       },
     );
+
+    await refreshLeaderboardForUser({
+      client: api.adminClient,
+      profileId: api.current.profileId,
+    });
 
     return NextResponse.json({
       workoutLog: updateRes.data,

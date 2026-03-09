@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getWorkoutPlannerApiContext } from "@/lib/workout-planner/apiContext";
-import { updatePlanStatus } from "@/lib/workout-planner/service";
+import { updatePlan } from "@/lib/workout-planner/service";
 
 type RouteParams = {
   params: Promise<{ id: string }>;
@@ -14,13 +14,17 @@ export async function PATCH(request: NextRequest, context: RouteParams) {
       windowSeconds: 60,
     });
     const { id } = await context.params;
-    const payload = (await request.json()) as { isActive?: boolean };
-    const isActive = Boolean(payload.isActive);
+    const payload = (await request.json()) as {
+      isActive?: boolean;
+      name?: string;
+      goal?: string;
+      workoutDaysPerWeek?: number;
+    };
 
-    const result = await updatePlanStatus(
+    const result = await updatePlan(
       { client: api.client, profileId: api.current.profileId },
       id,
-      isActive,
+      payload,
     );
 
     return NextResponse.json({ plan: result });

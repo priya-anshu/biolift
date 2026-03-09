@@ -232,17 +232,47 @@ export async function listUserPlans(context: ServiceContext) {
   return plansRes.data ?? [];
 }
 
-export async function updatePlanStatus(
+export type UpdatePlanInput = {
+  isActive?: boolean;
+  name?: string;
+  goal?: string;
+  workoutDaysPerWeek?: number;
+};
+
+export async function updatePlan(
   context: ServiceContext,
   planId: string,
-  isActive: boolean,
+  input: UpdatePlanInput,
 ) {
+  const payload: Record<string, unknown> = {};
+  if (typeof input.isActive === "boolean") {
+    payload.is_active = input.isActive;
+  }
+  if (typeof input.name === "string") {
+    const trimmed = input.name.trim();
+    if (trimmed.length === 0) {
+      throw new Error("Plan name is required");
+    }
+    payload.name = trimmed;
+  }
+  if (typeof input.goal === "string") {
+    payload.goal = input.goal;
+  }
+  if (typeof input.workoutDaysPerWeek === "number") {
+    payload.workout_days_per_week = Math.max(1, Math.min(7, Math.floor(input.workoutDaysPerWeek)));
+  }
+  if (Object.keys(payload).length === 0) {
+    throw new Error("No plan updates provided");
+  }
+
   const result = await context.client
     .from("workout_plans")
-    .update({ is_active: isActive })
+    .update(payload)
     .eq("id", planId)
     .eq("user_id", context.profileId)
-    .select("id,is_active")
+    .select(
+      "id,name,goal,experience_level,workout_days_per_week,muscle_split,planning_mode,created_by,visibility,is_active,created_at",
+    )
     .maybeSingle();
   if (result.error) {
     throw new Error(result.error.message);
@@ -251,6 +281,14 @@ export async function updatePlanStatus(
     throw new Error("Plan not found or not owned by user");
   }
   return result.data;
+}
+
+export async function updatePlanStatus(
+  context: ServiceContext,
+  planId: string,
+  isActive: boolean,
+) {
+  return updatePlan(context, planId, { isActive });
 }
 
 function convertCalendarToWorkoutStatus(
@@ -555,4 +593,615 @@ export async function getWorkoutRecommendations(
     { client: context.client, profileId: context.profileId },
     input,
   );
+}
+
+function toIsoDateOnly(value: Date) {
+  return value.toISOString().slice(0, 10);
+}
+
+function daysAgoDate(days: number) {
+  const date = new Date();
+  date.setDate(date.getDate() - days);
+  return date;
+}
+
+function clampIntValue(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, Math.floor(value)));
+}
+
+function parseNumeric(value: unknown, fallback = 0) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim().length > 0) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return fallback;
+}
+
+export async function getDashboardSummary(
+  context: ServiceContext,
+  input?: { days?: number; recentLimit?: number },
+) {
+  const days = clampIntValue(input?.days ?? 7, 1, 60);
+  const recentLimit = clampIntValue(input?.recentLimit ?? 6, 1, 30);
+  const fromDate = toIsoDateOnly(daysAgoDate(days - 1));
+  const fromIso = daysAgoDate(days).toISOString();
+
+  const [logsRes, goalsRes, heartRes] = await Promise.all([
+    context.client
+      .from("workout_logs")
+      .select(
+        "id,workout_date,status,total_duration_minutes,calories_burned,source,created_at",
+      )
+      .eq("user_id", context.profileId)
+      .gte("workout_date", fromDate)
+      .order("workout_date", { ascending: false })
+      .order("created_at", { ascending: false })
+      .limit(500),
+    context.client
+      .from("goals")
+      .select("id,title,current_value,target_value,unit")
+      .eq("user_id", context.profileId)
+      .order("created_at", { ascending: false })
+      .limit(3),
+    context.client
+      .from("progress_entries")
+      .select("value")
+      .eq("user_id", context.profileId)
+      .eq("metric", "heart_rate")
+      .gte("recorded_at", fromIso),
+  ]);
+
+  if (logsRes.error) throw new Error(logsRes.error.message);
+  if (goalsRes.error) throw new Error(goalsRes.error.message);
+  if (heartRes.error) throw new Error(heartRes.error.message);
+
+  const logs = (logsRes.data ?? []) as Array<{
+    id: string;
+    workout_date: string;
+    status: string;
+    total_duration_minutes: number;
+    calories_burned: number;
+    source: string;
+    created_at: string;
+  }>;
+
+  const logIds = logs.map((row) => row.id);
+  const exerciseRes =
+    logIds.length > 0
+      ? await context.client
+          .from("workout_log_exercises")
+          .select("workout_log_id,exercise_name,exercise_order")
+          .eq("user_id", context.profileId)
+          .in("workout_log_id", logIds)
+          .order("exercise_order", { ascending: true })
+      : { data: [], error: null };
+  if (exerciseRes.error) throw new Error(exerciseRes.error.message);
+
+  const firstExerciseByLog = new Map<string, string>();
+  (exerciseRes.data ?? []).forEach((row) => {
+    const logId = String(row.workout_log_id);
+    if (firstExerciseByLog.has(logId)) return;
+    const name = String(row.exercise_name ?? "").trim();
+    if (name.length > 0) {
+      firstExerciseByLog.set(logId, name);
+    }
+  });
+
+  const completedStatuses = new Set(["completed", "in_progress"]);
+  const workoutsThisPeriod = logs.filter((row) =>
+    completedStatuses.has(String(row.status)),
+  ).length;
+  const caloriesBurned = logs.reduce(
+    (sum, row) => sum + parseNumeric(row.calories_burned, 0),
+    0,
+  );
+  const activeMinutes = logs.reduce(
+    (sum, row) => sum + parseNumeric(row.total_duration_minutes, 0),
+    0,
+  );
+
+  const recentActivity = logs.slice(0, recentLimit).map((row) => {
+    const exerciseName = firstExerciseByLog.get(row.id);
+    const baseName =
+      exerciseName ??
+      (row.source === "manual" ? "Manual Workout" : "Planner Workout");
+    return {
+      id: row.id,
+      name: baseName,
+      type: row.source ?? "workout",
+      duration_minutes: Math.max(0, Math.floor(parseNumeric(row.total_duration_minutes, 0))),
+      calories: Math.max(0, Math.floor(parseNumeric(row.calories_burned, 0))),
+      performed_at: `${row.workout_date}T00:00:00.000Z`,
+      status: row.status,
+    };
+  });
+
+  const heartRows = (heartRes.data ?? []) as Array<{ value: number }>;
+  const heartRateAvg =
+    heartRows.length > 0
+      ? Math.round(
+          heartRows.reduce((sum, row) => sum + parseNumeric(row.value, 0), 0) /
+            heartRows.length,
+        )
+      : null;
+
+  return {
+    days,
+    metrics: {
+      workoutsThisPeriod,
+      caloriesBurned,
+      activeMinutes,
+    },
+    recentActivity,
+    goals: goalsRes.data ?? [],
+    heartRateAvg,
+  };
+}
+
+export async function getProgressOverview(
+  context: ServiceContext,
+  range: "week" | "month",
+) {
+  const days = range === "week" ? 7 : 30;
+  const fromDate = toIsoDateOnly(daysAgoDate(days - 1));
+  const fromIso = daysAgoDate(days).toISOString();
+
+  const [logsRes, goalsRes, heartRes] = await Promise.all([
+    context.client
+      .from("workout_logs")
+      .select(
+        "id,workout_date,status,total_duration_minutes,calories_burned,source,created_at,completion_percentage",
+      )
+      .eq("user_id", context.profileId)
+      .gte("workout_date", fromDate)
+      .order("workout_date", { ascending: false })
+      .order("created_at", { ascending: false }),
+    context.client
+      .from("goals")
+      .select("id,title,current_value,target_value,unit")
+      .eq("user_id", context.profileId)
+      .order("created_at", { ascending: false })
+      .limit(4),
+    context.client
+      .from("progress_entries")
+      .select("id,value,metric,recorded_at")
+      .eq("user_id", context.profileId)
+      .eq("metric", "heart_rate")
+      .gte("recorded_at", fromIso),
+  ]);
+
+  if (logsRes.error) throw new Error(logsRes.error.message);
+  if (goalsRes.error) throw new Error(goalsRes.error.message);
+  if (heartRes.error) throw new Error(heartRes.error.message);
+
+  const logs = (logsRes.data ?? []) as Array<{
+    id: string;
+    workout_date: string;
+    status: string;
+    total_duration_minutes: number;
+    calories_burned: number;
+    source: string;
+    created_at: string;
+    completion_percentage: number;
+  }>;
+
+  const logIds = logs.map((row) => row.id);
+  const exerciseRes =
+    logIds.length > 0
+      ? await context.client
+          .from("workout_log_exercises")
+          .select("workout_log_id,exercise_name,exercise_order,total_volume_kg")
+          .eq("user_id", context.profileId)
+          .in("workout_log_id", logIds)
+          .order("exercise_order", { ascending: true })
+      : { data: [], error: null };
+  if (exerciseRes.error) throw new Error(exerciseRes.error.message);
+
+  const firstExerciseByLog = new Map<string, string>();
+  const volumeByLog = new Map<string, number>();
+  (exerciseRes.data ?? []).forEach((row) => {
+    const logId = String(row.workout_log_id);
+    const existingVolume = volumeByLog.get(logId) ?? 0;
+    volumeByLog.set(logId, existingVolume + parseNumeric(row.total_volume_kg, 0));
+    if (firstExerciseByLog.has(logId)) return;
+    const exerciseName = String(row.exercise_name ?? "").trim();
+    if (exerciseName.length > 0) {
+      firstExerciseByLog.set(logId, exerciseName);
+    }
+  });
+
+  const workouts = logs.map((row) => ({
+    id: row.id,
+    name:
+      firstExerciseByLog.get(row.id) ??
+      (row.source === "manual" ? "Manual Workout" : "Workout Session"),
+    type: row.source ?? "workout",
+    duration_minutes: Math.max(0, Math.floor(parseNumeric(row.total_duration_minutes, 0))),
+    calories: Math.max(0, Math.floor(parseNumeric(row.calories_burned, 0))),
+    performed_at: `${row.workout_date}T00:00:00.000Z`,
+    status: row.status,
+    completion_percentage: parseNumeric(row.completion_percentage, 0),
+    volume_kg: Number((volumeByLog.get(row.id) ?? 0).toFixed(2)),
+  }));
+
+  const completedLogs = workouts.filter((row) => row.status === "completed");
+  const workoutsCount = completedLogs.length;
+  const caloriesBurned = completedLogs.reduce((sum, row) => sum + row.calories, 0);
+  const activeMinutes = completedLogs.reduce(
+    (sum, row) => sum + row.duration_minutes,
+    0,
+  );
+  const avgHeartRate = heartRes.data?.length
+    ? Math.round(
+        (heartRes.data ?? []).reduce(
+          (sum, row) => sum + parseNumeric((row as { value: number }).value, 0),
+          0,
+        ) / (heartRes.data?.length ?? 1),
+      )
+    : null;
+
+  return {
+    range,
+    workouts,
+    goals: goalsRes.data ?? [],
+    heartEntries: heartRes.data ?? [],
+    stats: {
+      workoutsCount,
+      caloriesBurned,
+      activeMinutes,
+      avgHeartRate,
+    },
+  };
+}
+
+export async function logBodyWeightEntry(
+  context: ServiceContext,
+  input: { valueKg: number; recordedAt: string },
+) {
+  const value = Number(input.valueKg);
+  if (!Number.isFinite(value) || value <= 0 || value > 500) {
+    throw new Error("valueKg must be a valid positive number");
+  }
+  if (!input.recordedAt || Number.isNaN(new Date(input.recordedAt).getTime())) {
+    throw new Error("recordedAt must be a valid ISO datetime");
+  }
+
+  const result = await context.client
+    .from("progress_entries")
+    .insert({
+      user_id: context.profileId,
+      metric: "body_weight",
+      value,
+      unit: "kg",
+      recorded_at: input.recordedAt,
+      meta: { source: "manual" },
+    })
+    .select("id,metric,value,unit,recorded_at")
+    .single();
+  if (result.error) throw new Error(result.error.message);
+  return result.data;
+}
+
+export async function logManualWorkoutExecution(
+  context: ServiceContext,
+  input: {
+    name: string;
+    type?: string;
+    durationMinutes?: number | null;
+    caloriesBurned?: number | null;
+    exerciseName?: string | null;
+    sets?: number | null;
+    reps?: number | null;
+    weightPerSetKg?: number | null;
+    performedAt?: string | null;
+    notes?: string | null;
+  },
+) {
+  const name = input.name.trim();
+  if (!name) {
+    throw new Error("Workout name is required");
+  }
+
+  const now = input.performedAt ? new Date(input.performedAt) : new Date();
+  if (Number.isNaN(now.getTime())) {
+    throw new Error("performedAt must be a valid datetime");
+  }
+  const nowIso = now.toISOString();
+  const workoutDate = nowIso.slice(0, 10);
+  const durationMinutes = Math.max(
+    0,
+    Math.floor(parseNumeric(input.durationMinutes, 0)),
+  );
+  const caloriesBurned = Math.max(
+    0,
+    Math.floor(parseNumeric(input.caloriesBurned, 0)),
+  );
+  const setCount = clampIntValue(parseNumeric(input.sets, 1), 1, 30);
+  const reps = clampIntValue(parseNumeric(input.reps, 10), 1, 120);
+  const weightPerSet = Math.max(0, parseNumeric(input.weightPerSetKg, 0));
+  const totalReps = setCount * reps;
+  const totalVolume = Number((setCount * reps * weightPerSet).toFixed(2));
+
+  const logRes = await context.client
+    .from("workout_logs")
+    .insert({
+      user_id: context.profileId,
+      workout_date: workoutDate,
+      status: "completed",
+      started_at: nowIso,
+      completed_at: nowIso,
+      completion_percentage: 100,
+      total_exercises: 1,
+      exercises_completed: 1,
+      total_duration_minutes: durationMinutes,
+      calories_burned: caloriesBurned,
+      notes: input.notes ?? null,
+      source: "manual",
+      updated_at: nowIso,
+    })
+    .select(
+      "id,workout_date,status,completion_percentage,total_exercises,exercises_completed,total_duration_minutes,calories_burned,source",
+    )
+    .single();
+  if (logRes.error || !logRes.data) {
+    throw new Error(logRes.error?.message ?? "Failed to insert workout log");
+  }
+
+  const exerciseName = (input.exerciseName ?? "").trim() || name;
+  const exerciseRes = await context.client
+    .from("workout_log_exercises")
+    .insert({
+      workout_log_id: logRes.data.id,
+      user_id: context.profileId,
+      exercise_name: exerciseName,
+      muscle_group: input.type ? String(input.type).toLowerCase() : "general",
+      exercise_order: 1,
+      planned_sets: setCount,
+      planned_reps_min: reps,
+      planned_reps_max: reps,
+      planned_rest_seconds: 60,
+      completed_sets: setCount,
+      total_reps: totalReps,
+      total_volume_kg: totalVolume,
+      best_set_weight_kg: weightPerSet,
+      best_set_reps: reps,
+      status: "completed",
+      completed: true,
+      notes: input.notes ?? null,
+      updated_at: nowIso,
+    })
+    .select("id")
+    .single();
+  if (exerciseRes.error || !exerciseRes.data) {
+    throw new Error(
+      exerciseRes.error?.message ?? "Failed to insert workout exercise row",
+    );
+  }
+
+  const setRows = Array.from({ length: setCount }).map((_, index) => ({
+    workout_log_exercise_id: exerciseRes.data.id,
+    workout_log_id: logRes.data.id,
+    user_id: context.profileId,
+    set_number: index + 1,
+    target_reps_min: reps,
+    target_reps_max: reps,
+    actual_reps: reps,
+    actual_weight_kg: weightPerSet,
+    actual_rpe: null,
+    set_status: "completed",
+    performed_at: nowIso,
+    updated_at: nowIso,
+  }));
+  const setInsertRes = await context.client.from("workout_log_sets").insert(setRows);
+  if (setInsertRes.error) {
+    throw new Error(setInsertRes.error.message);
+  }
+
+  return logRes.data;
+}
+
+function computeDateStreak(dateKeys: string[]) {
+  if (dateKeys.length === 0) return 0;
+  const unique = Array.from(new Set(dateKeys)).sort();
+  let streak = 0;
+  let cursor = new Date(`${unique[unique.length - 1]}T00:00:00Z`);
+  while (true) {
+    const key = toIsoDateOnly(cursor);
+    if (!unique.includes(key)) break;
+    streak += 1;
+    cursor.setUTCDate(cursor.getUTCDate() - 1);
+  }
+  return streak;
+}
+
+function tierForScore(totalScore: number) {
+  if (totalScore >= 750) return "Diamond";
+  if (totalScore >= 550) return "Platinum";
+  if (totalScore >= 350) return "Gold";
+  if (totalScore >= 200) return "Silver";
+  return "Bronze";
+}
+
+export async function refreshLeaderboardForUser(context: ServiceContext) {
+  const thirtyDate = toIsoDateOnly(daysAgoDate(29));
+  const fourteenDate = toIsoDateOnly(daysAgoDate(13));
+  const ninetyIso = daysAgoDate(90).toISOString();
+
+  const logsRes = await context.client
+    .from("workout_logs")
+    .select(
+      "id,workout_date,status,total_duration_minutes,calories_burned,completion_percentage",
+    )
+    .eq("user_id", context.profileId)
+    .gte("workout_date", thirtyDate)
+    .order("workout_date", { ascending: false });
+  if (logsRes.error) throw new Error(logsRes.error.message);
+  const logs = (logsRes.data ?? []) as Array<{
+    id: string;
+    workout_date: string;
+    status: string;
+    total_duration_minutes: number;
+    calories_burned: number;
+    completion_percentage: number;
+  }>;
+
+  const logIds = logs.map((row) => row.id);
+  const volumeRes =
+    logIds.length > 0
+      ? await context.client
+          .from("workout_log_exercises")
+          .select("workout_log_id,total_volume_kg")
+          .eq("user_id", context.profileId)
+          .in("workout_log_id", logIds)
+      : { data: [], error: null };
+  if (volumeRes.error) throw new Error(volumeRes.error.message);
+  const totalVolume = (volumeRes.data ?? []).reduce(
+    (sum, row) => sum + parseNumeric(row.total_volume_kg, 0),
+    0,
+  );
+
+  const [progressRes, prRes] = await Promise.all([
+    context.client
+      .from("progress_entries")
+      .select("metric,value,recorded_at")
+      .eq("user_id", context.profileId)
+      .gte("recorded_at", daysAgoDate(30).toISOString())
+      .order("recorded_at", { ascending: true }),
+    context.client
+      .from("personal_records")
+      .select("estimated_1rm,achieved_at")
+      .eq("user_id", context.profileId)
+      .gte("achieved_at", ninetyIso)
+      .order("achieved_at", { ascending: true }),
+  ]);
+  if (progressRes.error) throw new Error(progressRes.error.message);
+  if (prRes.error) throw new Error(prRes.error.message);
+
+  const completedLogs = logs.filter((row) => row.status === "completed");
+  const activityKeys14 = completedLogs
+    .map((row) => row.workout_date)
+    .filter((dateKey) => dateKey >= fourteenDate);
+  const activityDays14 = Array.from(new Set(activityKeys14)).length;
+  const streakDays = computeDateStreak(activityKeys14);
+  const totalDuration = completedLogs.reduce(
+    (sum, row) => sum + parseNumeric(row.total_duration_minutes, 0),
+    0,
+  );
+  const totalCalories = completedLogs.reduce(
+    (sum, row) => sum + parseNumeric(row.calories_burned, 0),
+    0,
+  );
+  const avgCompletion =
+    logs.length > 0
+      ? logs.reduce(
+          (sum, row) => sum + parseNumeric(row.completion_percentage, 0),
+          0,
+        ) / logs.length
+      : 0;
+
+  const prRows = (prRes.data ?? []) as Array<{ estimated_1rm: number; achieved_at: string }>;
+  const prMax = prRows.length
+    ? Math.max(...prRows.map((row) => parseNumeric(row.estimated_1rm, 0)))
+    : 0;
+  const midpoint = daysAgoDate(45).toISOString();
+  const prBaseline = prRows
+    .filter((row) => row.achieved_at < midpoint)
+    .map((row) => parseNumeric(row.estimated_1rm, 0));
+  const prRecent = prRows
+    .filter((row) => row.achieved_at >= midpoint)
+    .map((row) => parseNumeric(row.estimated_1rm, 0));
+  const prImprovement =
+    prRecent.length > 0
+      ? Math.max(...prRecent) - (prBaseline.length > 0 ? Math.max(...prBaseline) : 0)
+      : 0;
+
+  const weightRows = ((progressRes.data ?? []) as Array<{
+    metric: string;
+    value: number;
+  }>).filter((row) => row.metric === "body_weight");
+  const weightImprovement =
+    weightRows.length >= 2
+      ? parseNumeric(weightRows[0].value, 0) -
+        parseNumeric(weightRows[weightRows.length - 1].value, 0)
+      : 0;
+
+  const strengthScore = Math.round(Math.min(1000, totalVolume * 0.08 + prMax * 2));
+  const staminaScore = Math.round(
+    Math.min(1000, totalDuration * 1.4 + totalCalories * 0.15),
+  );
+  const consistencyScore = Math.round(
+    Math.min(1000, activityDays14 * 45 + streakDays * 20 + avgCompletion * 2),
+  );
+  const improvementScore = Math.round(
+    Math.min(1000, Math.max(0, prImprovement) * 8 + Math.max(0, weightImprovement) * 40),
+  );
+  const totalScore = Math.round(
+    strengthScore * 0.35 +
+      staminaScore * 0.25 +
+      consistencyScore * 0.25 +
+      improvementScore * 0.15,
+  );
+
+  const upsertRes = await context.client
+    .from("leaderboard")
+    .upsert(
+      {
+        user_id: context.profileId,
+        total_score: totalScore,
+        strength_score: strengthScore,
+        stamina_score: staminaScore,
+        consistency_score: consistencyScore,
+        improvement_score: improvementScore,
+        activity_days_14d: activityDays14,
+        streak_days: streakDays,
+        tier: tierForScore(totalScore),
+        last_calculated_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "user_id" },
+    )
+    .select(
+      "id,user_id,total_score,strength_score,stamina_score,consistency_score,improvement_score,tier,position,activity_days_14d,streak_days,updated_at",
+    )
+    .single();
+  if (upsertRes.error) throw new Error(upsertRes.error.message);
+  return upsertRes.data;
+}
+
+export async function getRankingOverview(context: ServiceContext) {
+  await refreshLeaderboardForUser(context);
+
+  const leaderboardRes = await context.client
+    .from("leaderboard")
+    .select(
+      "id,user_id,total_score,strength_score,stamina_score,consistency_score,improvement_score,tier,position,activity_days_14d,streak_days,updated_at,profiles(name,email,avatar_url)",
+    )
+    .order("total_score", { ascending: false })
+    .limit(100);
+  if (leaderboardRes.error) throw new Error(leaderboardRes.error.message);
+
+  const normalized: Array<Record<string, unknown>> = (
+    (leaderboardRes.data ?? []) as Array<Record<string, unknown>>
+  ).map((row) => {
+    const profileRaw = row.profiles;
+    const profile = Array.isArray(profileRaw) ? profileRaw[0] : profileRaw;
+    return {
+      ...row,
+      profiles: profile ?? null,
+    };
+  });
+
+  const myEntry =
+    (normalized.find((row) => String(row.user_id) === context.profileId) as
+      | Record<string, unknown>
+      | undefined) ?? null;
+
+  return {
+    profileId: context.profileId,
+    leaderboard: normalized,
+    myEntry,
+    activityDays: Number(myEntry?.activity_days_14d ?? 0),
+    streakDays: Number(myEntry?.streak_days ?? 0),
+  };
 }
