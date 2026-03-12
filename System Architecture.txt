@@ -1,0 +1,42 @@
+                 ┌─────────────────────┐
+                 │      Frontend       │
+                 │   Next.js UI        │
+                 └──────────┬──────────┘
+                            │
+                            ▼
+                 ┌─────────────────────┐
+                 │     API Layer       │
+                 │   Next.js routes    │
+                 └──────────┬──────────┘
+                            │
+                     enqueue jobs
+                            │
+                            ▼
+                 ┌─────────────────────┐
+                 │      Job Queue      │
+                 │     ai_job_queue    │
+                 └──────────┬──────────┘
+                            │
+                            ▼
+                 ┌─────────────────────┐
+                 │       Worker        │
+                 │    workerQueue.ts   │
+                 └──────────┬──────────┘
+                            │
+          ┌─────────────────┼─────────────────┐
+          ▼                 ▼                 ▼
+  Recovery Engine     Training Load       Training Brain
+ recoveryEngine.ts   trainingLoadEngine   trainingBrain.ts
+          │                 │                 │
+          └──────────────┬──┴──┬──────────────┘
+                         ▼     ▼
+                Analytics Snapshots
+             user_training_stats
+             exercise_volume_stats
+                         │
+                         ▼
+                AI Recommendations
+                ai_recommendations
+                         │
+                         ▼
+                   Frontend UI

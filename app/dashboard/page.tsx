@@ -1,179 +1,158 @@
 "use client";
 
-import { motion } from "framer-motion";
-import {
-  Activity,
-  Flame,
-  Heart,
-  Medal,
-  ArrowRight,
-  Play,
-  Plus,
-  Target,
-  Timer,
-  TrendingUp,
-  Zap,
-  CalendarDays,
-} from "lucide-react";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+import { Activity, Medal, Zap } from "lucide-react";
+import Card from "@/components/ui/Card";
+import Badge from "@/components/ui/Badge";
+import AICoachCard from "@/components/ai/AICoachCard";
+import RecoveryStatusCard from "@/components/recovery/RecoveryStatusCard";
+import TrainingLoadMeter from "@/components/training/TrainingLoadMeter";
+import ConsistencyTracker from "@/components/training/ConsistencyTracker";
 import { useAuth } from "@/lib/auth/AuthContext";
 
-const sectionVariants = {
-  hidden: { opacity: 0, y: 16 },
-  visible: { opacity: 1, y: 0 },
-};
-
-function Shimmer() {
-  return (
-    <motion.div
-      aria-hidden="true"
-      className="pointer-events-none absolute inset-0"
-      initial={{ x: "-100%" }}
-      animate={{ x: "100%" }}
-      transition={{ duration: 1.6, repeat: Infinity, ease: "linear" }}
-    >
-      <div className="h-full w-1/2 bg-linear-to-r from-transparent via-white/50 to-transparent" />
-    </motion.div>
-  );
-}
-
-type Workout = {
-  id: string;
-  name: string;
-  type: string | null;
-  duration_minutes: number | null;
-  calories: number | null;
-  performed_at: string;
-  status?: string;
-};
-
-type Goal = {
-  id: string;
-  title: string;
-  current_value: number | null;
-  target_value: number | null;
-  unit: string | null;
-};
-
-type MotivationResponse = {
-  date: string;
-  language: "en" | "hi" | "bi";
-  message: string;
-  todayPlan: {
-    id: string;
-    name: string;
-    exercises: Array<{
-      id: string;
-      exercise_name: string;
-      sets?: number;
-      reps_min?: number;
-      reps_max?: number;
-      rest_seconds?: number;
-    }>;
-  } | null;
-  completionPercentage: number;
-  currentStreak: number;
-  totalCompletedWorkouts: number;
-};
+type ProgressionAction = "increase" | "maintain" | "reduce" | "deload" | "substitute";
 
 type DashboardSummaryResponse = {
+  requiresPlan?: boolean;
   metrics: {
     workoutsThisPeriod: number;
     caloriesBurned: number;
     activeMinutes: number;
   };
-  recentActivity: Workout[];
-  goals: Goal[];
-  heartRateAvg: number | null;
+  trainingStats?: {
+    workouts_completed_7d?: number | null;
+    consistency_score?: number | null;
+    streak_days?: number | null;
+    weekly_volume_kg?: number | null;
+  } | null;
+  recentActivity: Array<{
+    id: string;
+    name: string;
+    type: string | null;
+    duration_minutes: number | null;
+    calories: number | null;
+    performed_at: string;
+    status?: string;
+  }>;
+  todayWorkout?: {
+    workoutDate: string;
+    cacheState: string;
+    planId: string | null;
+    readinessBand: string;
+    readinessScore: number | null;
+    fatigueScore: number;
+    previewExercises: Array<{
+      plan_exercise_id: string;
+      exercise_name: string;
+      muscle_group: string;
+      exercise_order: number;
+      recommended_sets: number;
+      recommended_reps: { min: number; max: number };
+      recommended_weight: number | null;
+      rest_seconds: number;
+      progression_action: ProgressionAction;
+      recommendation_reason: string[];
+    }>;
+  };
+  recoveryStatus?: {
+    readiness_score?: number | null;
+    fatigue_score?: number | null;
+    sleep_minutes?: number | null;
+    soreness?: number | null;
+    stress?: number | null;
+    recommendation?: string;
+  } | null;
+  progressSummary?: {
+    weeklyWorkouts: number;
+    streakDays: number;
+    weeklyVolumeKg: number;
+    consistencyScore: number;
+    volumeTrendPct: number;
+  } | null;
+  leaderboardSummary?: {
+    rank: number | null;
+    tier: string | null;
+    totalScore: number | null;
+  } | null;
+  trainingLoadState?: {
+    acwr?: number | null;
+    acute_load_7d?: number | null;
+    chronic_load_28d?: number | null;
+    overtraining_risk?: number | null;
+    plateau_risk?: number | null;
+    volume_trend_pct?: number | null;
+  } | null;
+  error?: string;
 };
 
-function formatExerciseVolume(exercise: {
-  sets?: number;
-  reps_min?: number;
-  reps_max?: number;
-}) {
-  const sets = exercise.sets ?? 0;
-  const repsMin = exercise.reps_min ?? 0;
-  const repsMax = exercise.reps_max ?? 0;
+function actionClass(action: ProgressionAction) {
+  if (action === "increase") {
+    return "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300";
+  }
+  if (action === "maintain") {
+    return "bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-300";
+  }
+  if (action === "reduce") {
+    return "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300";
+  }
+  if (action === "deload") {
+    return "bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300";
+  }
+  return "bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300";
+}
 
-  if (sets > 0 && repsMin > 0 && repsMax > 0) {
-    return `${sets} sets - ${repsMin}-${repsMax} reps`;
-  }
-  if (sets > 0 && repsMin > 0) {
-    return `${sets} sets - ${repsMin} reps`;
-  }
-  return "Volume not set";
+function actionLabel(action: ProgressionAction) {
+  return action.replaceAll("_", " ").replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
 export default function DashboardPage() {
   const { user } = useAuth();
-  const [workouts, setWorkouts] = useState<Workout[]>([]);
-  const [goals, setGoals] = useState<Goal[]>([]);
-  const [heartRateAvg, setHeartRateAvg] = useState<number | null>(null);
-  const [summaryMetrics, setSummaryMetrics] = useState({
-    workoutsThisPeriod: 0,
-    caloriesBurned: 0,
-    activeMinutes: 0,
-  });
-  const [motivation, setMotivation] = useState<MotivationResponse | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [summary, setSummary] = useState<DashboardSummaryResponse | null>(null);
+
+  const [recoveryForm, setRecoveryForm] = useState({
+    sleepHours: "7.5",
+    soreness: "3",
+    stress: "3",
+    energy: "7",
+  });
+  const [recoverySaving, setRecoverySaving] = useState(false);
+  const [recoveryMessage, setRecoveryMessage] = useState<string | null>(null);
+
+  const [injuryForm, setInjuryForm] = useState({
+    bodyRegion: "",
+    painLevel: "3",
+    severity: "2",
+  });
+  const [injurySaving, setInjurySaving] = useState(false);
+  const [injuryMessage, setInjuryMessage] = useState<string | null>(null);
+
+  const load = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const response = await fetch("/api/dashboard/summary?days=7&recentLimit=5", {
+        cache: "no-store",
+      });
+      const payload = (await response.json()) as DashboardSummaryResponse;
+      if (!response.ok) {
+        throw new Error(payload.error ?? "Failed to load dashboard");
+      }
+      setSummary(payload);
+    } catch (loadError) {
+      setSummary(null);
+      setError(loadError instanceof Error ? loadError.message : "Failed to load dashboard");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
     if (!user) return;
-
-    const load = async () => {
-      setLoading(true);
-      const [summaryRes, motivationRes] = await Promise.all([
-        fetch("/api/dashboard/summary?days=7&recentLimit=6", {
-          cache: "no-store",
-        }),
-        fetch("/api/dashboard/motivation", {
-          cache: "no-store",
-        }),
-      ]);
-
-      const summaryPayload = (await summaryRes.json()) as DashboardSummaryResponse & {
-        error?: string;
-      };
-      if (summaryRes.ok) {
-        setWorkouts(summaryPayload.recentActivity ?? []);
-        setGoals(summaryPayload.goals ?? []);
-        setHeartRateAvg(summaryPayload.heartRateAvg ?? null);
-        setSummaryMetrics(
-          summaryPayload.metrics ?? {
-            workoutsThisPeriod: 0,
-            caloriesBurned: 0,
-            activeMinutes: 0,
-          },
-        );
-      } else {
-        setWorkouts([]);
-        setGoals([]);
-        setHeartRateAvg(null);
-        setSummaryMetrics({
-          workoutsThisPeriod: 0,
-          caloriesBurned: 0,
-          activeMinutes: 0,
-        });
-      }
-
-      const motivationPayload = (await motivationRes.json()) as MotivationResponse & {
-        error?: string;
-      };
-      if (motivationRes.ok) {
-        setMotivation(motivationPayload);
-      }
-
-      setLoading(false);
-    };
-
-    load();
+    void load();
   }, [user]);
-
-  const weeklyWorkouts = summaryMetrics.workoutsThisPeriod;
-  const caloriesBurned = summaryMetrics.caloriesBurned;
-  const activeMinutes = summaryMetrics.activeMinutes;
 
   const displayName = useMemo(() => {
     const metadata = user?.user_metadata as
@@ -188,471 +167,423 @@ export default function DashboardPage() {
     );
   }, [user]);
 
-  const todayDayLabel = useMemo(() => {
-    const date = motivation?.date
-      ? new Date(`${motivation.date}T00:00:00`)
-      : new Date();
-    return date.toLocaleDateString("en-US", { weekday: "long" });
-  }, [motivation]);
+  const todayExercises = summary?.todayWorkout?.previewExercises ?? [];
+  const requiresPlan = Boolean(summary?.requiresPlan);
+  const recovery = summary?.recoveryStatus ?? null;
+  const progress = summary?.progressSummary ?? null;
+  const leaderboard = summary?.leaderboardSummary ?? null;
+  const trainingLoad = summary?.trainingLoadState ?? null;
+  const trainingStats = summary?.trainingStats ?? null;
 
-  const todaySessionSections = useMemo(() => {
-    const planExercises = motivation?.todayPlan?.exercises ?? [];
-    const mainExercises = planExercises;
+  const submitRecovery = async () => {
+    setRecoverySaving(true);
+    setRecoveryMessage(null);
+    try {
+      const sleepHours = Number(recoveryForm.sleepHours);
+      const response = await fetch("/api/recovery-metrics", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          metricDate: new Date().toISOString().slice(0, 10),
+          sleepDurationMinutes: Number.isFinite(sleepHours)
+            ? Math.max(0, Math.round(sleepHours * 60))
+            : null,
+          sorenessLevel: Number(recoveryForm.soreness),
+          stressLevel: Number(recoveryForm.stress),
+          energyLevel: Number(recoveryForm.energy),
+        }),
+      });
+      const payload = (await response.json()) as { error?: string };
+      if (!response.ok) {
+        throw new Error(payload.error ?? "Failed to save recovery metrics");
+      }
+      setRecoveryMessage("Recovery metrics saved.");
+      await load();
+    } catch (saveError) {
+      setRecoveryMessage(
+        saveError instanceof Error ? saveError.message : "Failed to save recovery metrics",
+      );
+    } finally {
+      setRecoverySaving(false);
+    }
+  };
 
-    const warmupSection = {
-      key: "warmup",
-      title: "Warmup",
-      subtitle: "Activation and prep",
-      tone: "bg-emerald-50 dark:bg-emerald-900/20",
-      items: [
-        "5 min brisk walk",
-        "Dynamic hip + shoulder mobility",
-        "2 rounds breathing activation",
-      ],
-    };
+  const submitInjury = async () => {
+    if (!injuryForm.bodyRegion.trim()) {
+      setInjuryMessage("Body region is required.");
+      return;
+    }
 
-    const mainSection = {
-      key: "exercises",
-      title: "Exercises",
-      subtitle: `${todayDayLabel} plan`,
-      tone: "bg-sky-50 dark:bg-sky-900/20",
-      items: mainExercises.map(
-        (exercise) => `${exercise.exercise_name} - ${formatExerciseVolume(exercise)}`,
-      ),
-    };
-
-    const postSection = {
-      key: "cooldown",
-      title: "Cooldown",
-      subtitle: "Recovery and reset",
-      tone: "bg-violet-50 dark:bg-violet-900/20",
-      items: [
-        "3-5 min cooldown walk",
-        "Hamstring + hip flexor stretch",
-        "Chest + lats stretch 30s x2",
-      ],
-    };
-
-    return [warmupSection, mainSection, postSection];
-  }, [motivation, todayDayLabel]);
-
-  const statCards = [
-    {
-      label: "Workouts This Week",
-      value: weeklyWorkouts.toString(),
-      delta: loading ? "-" : "+0",
-      icon: Flame,
-      tint: "text-orange-500",
-    },
-    {
-      label: "Calories Burned",
-      value: caloriesBurned.toLocaleString(),
-      delta: loading ? "-" : "+0",
-      icon: Zap,
-      tint: "text-amber-500",
-    },
-    {
-      label: "Active Minutes",
-      value: activeMinutes.toString(),
-      delta: loading ? "-" : "+0",
-      icon: Timer,
-      tint: "text-blue-500",
-    },
-    {
-      label: "Heart Rate Avg",
-      value: heartRateAvg ? heartRateAvg.toString() : "-",
-      delta: loading ? "-" : "+0",
-      danger: true,
-      icon: Heart,
-      tint: "text-rose-500",
-    },
-  ];
+    setInjurySaving(true);
+    setInjuryMessage(null);
+    try {
+      const response = await fetch("/api/injury-flags", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          bodyRegion: injuryForm.bodyRegion.trim(),
+          painLevel: Number(injuryForm.painLevel),
+          severity: Number(injuryForm.severity),
+          injuryType: "other",
+        }),
+      });
+      const payload = (await response.json()) as { error?: string };
+      if (!response.ok) {
+        throw new Error(payload.error ?? "Failed to report injury");
+      }
+      setInjuryMessage("Injury flag recorded.");
+      setInjuryForm((current) => ({ ...current, bodyRegion: "" }));
+    } catch (saveError) {
+      setInjuryMessage(
+        saveError instanceof Error ? saveError.message : "Failed to report injury",
+      );
+    } finally {
+      setInjurySaving(false);
+    }
+  };
 
   return (
-    <div className="space-y-8 text-day-text-primary dark:text-night-text-primary">
-        <motion.section
-          variants={sectionVariants}
-          initial="hidden"
-          animate="visible"
-          transition={{ duration: 0.5 }}
-        >
-          <h1 className="text-2xl font-semibold">Welcome back, {displayName}!</h1>
-          <p className="mt-1 text-sm text-day-text-secondary dark:text-night-text-secondary">
-            Ready to crush your fitness goals today?
-          </p>
-        </motion.section>
+    <div className="space-y-6 text-day-text-primary dark:text-night-text-primary">
+      <section>
+        <h1 className="text-2xl font-semibold">Welcome back, {displayName}</h1>
+        <p className="mt-1 text-sm text-day-text-secondary dark:text-night-text-secondary">
+          {requiresPlan
+            ? "Generate your first plan to start smart workout sessions."
+            : "Dashboard to session is now one flow: start workout, log sets, finish, AI adapts."}
+        </p>
+      </section>
 
-        <motion.section
-          variants={sectionVariants}
-          initial="hidden"
-          animate="visible"
-          transition={{ duration: 0.45 }}
-          className="rounded-2xl border border-day-border bg-day-card p-6 shadow-card dark:border-night-border dark:bg-night-card dark:shadow-card-dark"
-        >
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-day-text-secondary dark:text-night-text-secondary">
-                Today&apos;s Session
-              </p>
-              <h2 className="mt-2 text-xl font-semibold">
-                {motivation?.todayPlan?.name ?? "No active workout plan for today"}
-              </h2>
-              <p className="mt-2 text-sm text-day-text-secondary dark:text-night-text-secondary">
-                Warmup, exercises, then cooldown.
-              </p>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
+      {error ? (
+        <Card className="p-5">
+          <p className="text-sm text-red-600 dark:text-red-300">{error}</p>
+          <button
+            type="button"
+            onClick={() => void load()}
+            className="mt-3 rounded-lg bg-day-accent-primary px-4 py-2 text-sm font-semibold text-white dark:bg-night-accent"
+          >
+            Retry
+          </button>
+        </Card>
+      ) : null}
+
+      <AICoachCard
+        requiresPlan={requiresPlan}
+        recommendations={todayExercises}
+        recovery={recovery}
+        trainingLoad={trainingLoad}
+        trainingStats={trainingStats}
+      />
+
+      <Card className="p-5 sm:p-6">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-day-text-secondary dark:text-night-text-secondary">
+              Today&apos;s Workout
+            </p>
+            <h2 className="mt-1 text-xl font-semibold">
+              {todayExercises.length > 0
+                ? `${todayExercises.length} planned exercises`
+                : "No planned exercises yet"}
+            </h2>
+            <p className="mt-1 text-sm text-day-text-secondary dark:text-night-text-secondary">
+              Warmup - Main exercises - Cooldown
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {requiresPlan ? null : (
               <Link
                 href="/dashboard/workout-session"
-                className="inline-flex items-center gap-2 rounded-lg bg-day-accent-primary px-4 py-2.5 text-sm font-semibold text-white shadow-glow-blue transition hover:opacity-95 dark:bg-night-accent dark:shadow-glow"
+                className="rounded-lg bg-day-accent-primary px-4 py-2 text-sm font-semibold text-white dark:bg-night-accent"
               >
-                <Play className="h-4 w-4" />
                 Start Workout
               </Link>
-              <Link
-                href="/dashboard/workout-planner"
-                className="inline-flex items-center gap-2 rounded-lg border border-day-border px-3 py-2 text-sm font-semibold text-day-text-secondary hover:bg-day-hover dark:border-night-border dark:text-night-text-secondary dark:hover:bg-night-hover"
-              >
-                <CalendarDays className="h-4 w-4" />
-                Open Planner
-              </Link>
-            </div>
-          </div>
-
-          <div className="mt-4 space-y-3">
-            {todaySessionSections.map((section, index) => (
-              <div
-                key={`session-${section.key}`}
-                className={`rounded-xl border border-day-border p-4 dark:border-night-border ${section.tone}`}
-              >
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <h3 className="text-sm font-semibold">
-                    {index + 1}. {section.title}
-                  </h3>
-                  <span className="text-xs text-day-text-secondary dark:text-night-text-secondary">
-                    {section.subtitle}
-                  </span>
-                </div>
-
-                <ul className="mt-2 space-y-1.5 text-sm text-day-text-secondary dark:text-night-text-secondary">
-                  {section.items.length > 0 ? (
-                    section.items.map((item) => (
-                      <li key={`${section.key}-${item}`} className="flex gap-2">
-                        <span className="mt-1 inline-block h-1.5 w-1.5 rounded-full bg-day-accent-primary dark:bg-night-accent" />
-                        <span>{item}</span>
-                      </li>
-                    ))
-                  ) : (
-                    <li className="text-xs">
-                      {section.key === "exercises"
-                        ? "No exercises scheduled for this day."
-                        : "No items configured for this section."}
-                    </li>
-                  )}
-                </ul>
-              </div>
-            ))}
-          </div>
-        </motion.section>
-
-        {motivation ? (
-          <motion.section
-            variants={sectionVariants}
-            initial="hidden"
-            animate="visible"
-            transition={{ duration: 0.45 }}
-            className="rounded-2xl border border-day-border bg-day-card p-6 shadow-card dark:border-night-border dark:bg-night-card dark:shadow-card-dark"
-          >
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-day-text-secondary dark:text-night-text-secondary">
-                  Daily Motivation
-                </p>
-                <h2 className="mt-2 text-xl font-semibold">{motivation.message}</h2>
-                <p className="mt-2 text-sm text-day-text-secondary dark:text-night-text-secondary">
-                  Today: {motivation.todayPlan?.name ?? "No active plan"} -{" "}
-                  {motivation.todayPlan?.exercises.length ?? 0} exercises
-                </p>
-              </div>
-            </div>
-            <div className="mt-4 grid gap-3 md:grid-cols-3">
-              <div className="rounded-xl bg-day-hover px-3 py-2 dark:bg-night-hover">
-                <div className="text-xs text-day-text-secondary dark:text-night-text-secondary">
-                  Completion
-                </div>
-                <div className="text-lg font-semibold">{motivation.completionPercentage}%</div>
-              </div>
-              <div className="rounded-xl bg-day-hover px-3 py-2 dark:bg-night-hover">
-                <div className="text-xs text-day-text-secondary dark:text-night-text-secondary">
-                  Current Streak
-                </div>
-                <div className="text-lg font-semibold">{motivation.currentStreak} days</div>
-              </div>
-              <div className="rounded-xl bg-day-hover px-3 py-2 dark:bg-night-hover">
-                <div className="text-xs text-day-text-secondary dark:text-night-text-secondary">
-                  Total Completed
-                </div>
-                <div className="text-lg font-semibold">{motivation.totalCompletedWorkouts}</div>
-              </div>
-            </div>
-          </motion.section>
-        ) : null}
-        <motion.section
-          variants={sectionVariants}
-          initial="hidden"
-          animate="visible"
-          transition={{ duration: 0.5, delay: 0.1 }}
-          className="grid gap-4 md:grid-cols-2 lg:grid-cols-4"
-        >
-          {statCards.map((card) => (
-            <div
-              key={card.label}
-              className="relative overflow-hidden rounded-2xl border border-day-border bg-day-card p-5 shadow-card dark:border-night-border dark:bg-night-card dark:shadow-card-dark"
-            >
-              <div className="flex items-center justify-between">
-                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-day-hover dark:bg-night-hover">
-                  <card.icon className={`h-4 w-4 ${card.tint}`} />
-                </div>
-                <span
-                  className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
-                    card.danger
-                      ? "bg-red-100 text-red-600 dark:bg-red-900/40 dark:text-red-200"
-                      : "bg-emerald-100 text-emerald-600 dark:bg-emerald-900/40 dark:text-emerald-200"
-                  }`}
-                >
-                  {card.delta}
-                </span>
-              </div>
-              <div className="mt-4 text-2xl font-semibold">{card.value}</div>
-              <div className="text-sm text-day-text-secondary dark:text-night-text-secondary">
-                {card.label}
-              </div>
-              {loading ? (
-                <div className="absolute inset-0 opacity-20 dark:opacity-0">
-                  <Shimmer />
-                </div>
-              ) : null}
-            </div>
-          ))}
-        </motion.section>
-
-        <motion.section
-          variants={sectionVariants}
-          initial="hidden"
-          animate="visible"
-          transition={{ duration: 0.5, delay: 0.2 }}
-          className="grid gap-4 lg:grid-cols-3"
-        >
-          <div className="rounded-2xl bg-linear-to-br from-sky-600 via-teal-600 to-emerald-600 p-6 text-white shadow-lg dark:from-red-700 dark:via-red-800 dark:to-red-900">
-            <div className="flex items-center justify-between">
-              <div className="rounded-xl bg-white/20 p-2">
-                <Play className="h-5 w-5" />
-              </div>
-              <span className="rounded-full border border-white/40 px-3 py-1 text-xs font-semibold">
-                Quick Start
-              </span>
-            </div>
-            <h2 className="mt-6 text-lg font-semibold">Start Workout</h2>
-            <p className="mt-2 text-sm text-white/80">
-              Begin your next training session with AI-powered guidance
-            </p>
-            <Link
-              href="/dashboard/workout-session"
-              className="mt-6 inline-flex rounded-lg border border-white/40 px-4 py-2 text-sm font-semibold"
-            >
-              Start Now
-            </Link>
-          </div>
-
-          <div className="rounded-2xl border border-day-border bg-day-card p-6 shadow-card dark:border-night-border dark:bg-night-card dark:shadow-card-dark">
-            <div className="flex items-center justify-between">
-              <div className="rounded-xl bg-emerald-100 p-2 text-emerald-600 dark:bg-night-accent/20 dark:text-night-accent">
-                <Plus className="h-5 w-5" />
-              </div>
-              <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-600 dark:bg-night-accent/20 dark:text-night-accent">
-                New
-              </span>
-            </div>
-            <h2 className="mt-4 text-lg font-semibold">Create Plan</h2>
-            <p className="mt-2 text-sm text-day-text-secondary dark:text-night-text-secondary">
-              Generate a personalized workout plan based on your goals
-            </p>
+            )}
             <Link
               href="/dashboard/workout-planner"
-              className="mt-5 inline-flex rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white dark:bg-night-accent"
+              className="rounded-lg border border-day-border px-4 py-2 text-sm font-semibold text-day-text-secondary hover:bg-day-hover dark:border-night-border dark:text-night-text-secondary dark:hover:bg-night-hover"
             >
-              Create Plan
+              {requiresPlan ? "Generate Your First Workout Plan" : "View Full Workout"}
             </Link>
           </div>
+        </div>
 
-          <div className="rounded-2xl border border-day-border bg-day-card p-6 shadow-card dark:border-night-border dark:bg-night-card dark:shadow-card-dark">
-            <div className="flex items-center justify-between">
-              <div className="rounded-xl bg-sky-100 p-2 text-sky-600 dark:bg-night-accent/20 dark:text-night-accent">
-                <TrendingUp className="h-5 w-5" />
-              </div>
-              <span className="rounded-full bg-sky-100 px-2 py-0.5 text-xs font-semibold text-sky-600 dark:bg-night-accent/20 dark:text-night-accent">
-                Trending
-              </span>
+        <div className="mt-4 space-y-2">
+          {loading ? (
+            <div className="space-y-2">
+              <div className="skeleton h-12 rounded-lg" />
+              <div className="skeleton h-12 rounded-lg" />
+              <div className="skeleton h-12 rounded-lg" />
             </div>
-            <h2 className="mt-4 text-lg font-semibold">View Progress</h2>
-            <p className="mt-2 text-sm text-day-text-secondary dark:text-night-text-secondary">
-              Track your fitness journey with detailed analytics
-            </p>
-            <Link
-              href="/dashboard/progress"
-              className="mt-5 inline-flex rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white dark:bg-night-accent"
-            >
-              View Progress
-            </Link>
-          </div>
-        </motion.section>
-
-        <motion.section
-          variants={sectionVariants}
-          initial="hidden"
-          animate="visible"
-          transition={{ duration: 0.5, delay: 0.3 }}
-          className="grid gap-4 lg:grid-cols-2"
-        >
-          <div className="rounded-2xl border border-day-border bg-day-card p-6 shadow-card dark:border-night-border dark:bg-night-card dark:shadow-card-dark">
-            <div className="flex items-center justify-between">
-              <h3 className="text-lg font-semibold">Your Goals</h3>
-              <Link
-                href="/dashboard/goals"
-                className="flex items-center gap-1 rounded-lg border border-day-border px-3 py-1 text-xs font-semibold text-day-text-secondary transition-colors hover:bg-day-hover dark:border-night-border dark:text-night-text-secondary dark:hover:bg-night-hover"
-              >
-                View All <ArrowRight className="h-3 w-3" />
-              </Link>
+          ) : requiresPlan ? (
+            <div className="rounded-lg border border-day-border bg-day-hover/70 px-3 py-3 text-sm text-day-text-secondary dark:border-night-border dark:bg-night-hover/60 dark:text-night-text-secondary">
+              Generate your first workout plan to unlock today&apos;s session.
             </div>
-            <div className="mt-5 space-y-4">
-              {goals.length === 0 ? (
-                <div className="text-sm text-day-text-secondary dark:text-night-text-secondary">
-                  No goals yet. Add your first goal to get started.
-                </div>
-              ) : (
-                goals.map((goal) => {
-                  const current = goal.current_value ?? 0;
-                  const target = goal.target_value ?? 0;
-                  const pct =
-                    target > 0 ? Math.min((current / target) * 100, 100) : 0;
-                  return (
-                    <div key={goal.id}>
-                      <div className="flex items-center justify-between text-sm">
-                        <span className="font-medium">{goal.title}</span>
-                        <span className="text-day-text-secondary dark:text-night-text-secondary">
-                          {current}/{target} {goal.unit ?? ""}
-                        </span>
-                      </div>
-                      <div className="mt-2 h-2 w-full rounded-full bg-day-border dark:bg-night-border">
-                        <div
-                          className="h-2 rounded-full bg-emerald-500"
-                          style={{ width: `${pct}%` }}
-                        />
-                      </div>
-                    </div>
-                  );
-                })
-              )}
+          ) : todayExercises.length === 0 ? (
+            <div className="rounded-lg border border-day-border bg-day-hover/70 px-3 py-3 text-sm text-day-text-secondary dark:border-night-border dark:bg-night-hover/60 dark:text-night-text-secondary">
+              Baseline plan will appear after your first generated workout.
             </div>
-          </div>
-
-          <div className="rounded-2xl border border-day-border bg-day-card p-6 shadow-card dark:border-night-border dark:bg-night-card dark:shadow-card-dark">
-            <div className="flex items-center justify-between">
-              <h3 className="text-lg font-semibold">Recent Workouts</h3>
-              <Link
-                href="/dashboard/workouts"
-                className="flex items-center gap-1 rounded-lg border border-day-border px-3 py-1 text-xs font-semibold text-day-text-secondary transition-colors hover:bg-day-hover dark:border-night-border dark:text-night-text-secondary dark:hover:bg-night-hover"
-              >
-                View All <ArrowRight className="h-3 w-3" />
-              </Link>
-            </div>
-            <div className="mt-5 space-y-4">
-              {workouts.length === 0 ? (
-                <div className="text-sm text-day-text-secondary dark:text-night-text-secondary">
-                  No workouts logged yet.
-                </div>
-              ) : (
-                workouts.slice(0, 3).map((item) => (
-                  <div
-                    key={item.id}
-                    className="flex items-center justify-between"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-linear-to-br from-sky-500 to-emerald-500 text-white">
-                        <Play className="h-4 w-4" />
-                      </div>
-                      <div>
-                        <div className="text-sm font-semibold">{item.name}</div>
-                        <div className="text-xs text-day-text-secondary dark:text-night-text-secondary">
-                          {(item.duration_minutes ?? 0) > 0
-                            ? `${item.duration_minutes} min`
-                            : "0 min"}{" "}
-                          -{" "}
-                          {(item.calories ?? 0) > 0
-                            ? `${item.calories} cal`
-                            : "0 cal"}
-                        </div>
-                      </div>
-                    </div>
-                    <div className="text-right text-xs text-day-text-secondary dark:text-night-text-secondary">
-                      <span className="rounded-full bg-day-hover px-2 py-0.5 text-[11px] font-semibold text-day-text-secondary dark:bg-night-hover dark:text-night-text-secondary">
-                        {item.type ?? "Workout"}
-                      </span>
-                      <div className="mt-1">
-                        {new Date(item.performed_at).toLocaleDateString()}
-                      </div>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-        </motion.section>
-
-        <motion.section
-          variants={sectionVariants}
-          initial="hidden"
-          animate="visible"
-          transition={{ duration: 0.5, delay: 0.4 }}
-          className="rounded-2xl border border-day-border bg-day-card p-6 shadow-card dark:border-night-border dark:bg-night-card dark:shadow-card-dark"
-        >
-          <h3 className="text-lg font-semibold">Recent Achievements</h3>
-          <div className="mt-5 grid gap-4 md:grid-cols-3">
-            {[
-              {
-                title: "Streak Master",
-                desc: "7 day workout streak",
-                tone: "bg-amber-50 dark:bg-amber-900/20",
-                icon: Activity,
-              },
-              {
-                title: "Goal Crusher",
-                desc: "Hit 3 monthly goals",
-                tone: "bg-sky-50 dark:bg-sky-900/20",
-                icon: Target,
-              },
-              {
-                title: "Energy Boost",
-                desc: "Burned 2000+ calories",
-                tone: "bg-emerald-50 dark:bg-emerald-900/20",
-                icon: Medal,
-              },
-            ].map((item) => (
+          ) : (
+            todayExercises.slice(0, 5).map((exercise) => (
               <div
-                key={item.title}
-                className={`rounded-2xl border border-day-border p-5 ${item.tone} dark:border-night-border`}
+                key={exercise.plan_exercise_id}
+                className="rounded-lg border border-day-border bg-day-hover/70 px-3 py-3 dark:border-night-border dark:bg-night-hover/60"
               >
-                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-white text-slate-700 shadow-sm dark:bg-night-hover dark:text-night-text-primary">
-                  <item.icon className="h-5 w-5" />
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <p className="text-sm font-semibold">{exercise.exercise_name}</p>
+                    <p className="text-xs text-day-text-secondary dark:text-night-text-secondary">
+                      {exercise.recommended_sets} sets x {exercise.recommended_reps.min}-
+                      {exercise.recommended_reps.max} reps {" | "}
+                      {exercise.recommended_weight === null
+                        ? "Auto load"
+                        : `${exercise.recommended_weight} kg`}
+                      {" | Rest "}
+                      {exercise.rest_seconds}s
+                    </p>
+                  </div>
+                  <Badge className={actionClass(exercise.progression_action)} variant="ghost" size="sm">
+                    {actionLabel(exercise.progression_action)}
+                  </Badge>
                 </div>
-                <div className="mt-4 text-sm font-semibold">{item.title}</div>
-                <div className="text-xs text-day-text-secondary dark:text-night-text-secondary">
-                  {item.desc}
-                </div>
+                {exercise.recommendation_reason.length > 0 ? (
+                  <p className="mt-1 text-xs text-day-text-secondary dark:text-night-text-secondary">
+                    AI: {exercise.recommendation_reason[0]}
+                  </p>
+                ) : null}
               </div>
-            ))}
+            ))
+          )}
+        </div>
+      </Card>
+
+      <section className="grid gap-4 lg:grid-cols-3">
+        <RecoveryStatusCard recovery={recovery} />
+        <TrainingLoadMeter loadState={trainingLoad} />
+        <ConsistencyTracker
+          weeklyWorkouts={
+            progress?.weeklyWorkouts ??
+            Number(trainingStats?.workouts_completed_7d ?? summary?.metrics.workoutsThisPeriod ?? 0)
+          }
+          streakDays={progress?.streakDays ?? Number(trainingStats?.streak_days ?? 0)}
+          consistencyScore={
+            progress?.consistencyScore ?? Number(trainingStats?.consistency_score ?? 0)
+          }
+        />
+      </section>
+
+      <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <Card className="p-5">
+          <div className="flex items-center gap-2 text-sm font-semibold">
+            <Activity className="h-4 w-4 text-sky-500" />
+            Workouts This Week
           </div>
-        </motion.section>
+          <p className="mt-2 text-xl font-semibold">{summary?.metrics.workoutsThisPeriod ?? 0}</p>
+        </Card>
+        <Card className="p-5">
+          <div className="flex items-center gap-2 text-sm font-semibold">
+            <Zap className="h-4 w-4 text-orange-500" />
+            Calories This Week
+          </div>
+          <p className="mt-2 text-xl font-semibold">
+            {Math.round(summary?.metrics.caloriesBurned ?? 0)}
+          </p>
+        </Card>
+        <Card className="p-5">
+          <div className="flex items-center gap-2 text-sm font-semibold">
+            <Activity className="h-4 w-4 text-blue-500" />
+            Active Minutes
+          </div>
+          <p className="mt-2 text-xl font-semibold">
+            {Math.round(summary?.metrics.activeMinutes ?? 0)}
+          </p>
+        </Card>
+        <Card className="p-5">
+          <div className="flex items-center gap-2 text-sm font-semibold">
+            <Medal className="h-4 w-4 text-violet-500" />
+            Leaderboard
+          </div>
+          <p className="mt-2 text-xl font-semibold">#{leaderboard?.rank ?? "-"}</p>
+          <p className="text-xs text-day-text-secondary dark:text-night-text-secondary">
+            {leaderboard?.tier ?? "Unranked"} | Score {Math.round(Number(leaderboard?.totalScore ?? 0))}
+          </p>
+        </Card>
+      </section>
+
+      <section className="grid gap-4 lg:grid-cols-2">
+        <Card className="p-5">
+          <div className="text-sm font-semibold">Recovery Check-In</div>
+          <p className="mt-1 text-xs text-day-text-secondary dark:text-night-text-secondary">
+            Log sleep/soreness/stress/energy so AI can adapt tomorrow.
+          </p>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            <label className="text-xs">
+              <span className="text-day-text-secondary dark:text-night-text-secondary">
+                Sleep (hours)
+              </span>
+              <input
+                type="number"
+                min={0}
+                max={24}
+                step={0.5}
+                className="input-field mt-1"
+                value={recoveryForm.sleepHours}
+                onChange={(event) =>
+                  setRecoveryForm((current) => ({
+                    ...current,
+                    sleepHours: event.target.value,
+                  }))
+                }
+              />
+            </label>
+            <label className="text-xs">
+              <span className="text-day-text-secondary dark:text-night-text-secondary">
+                Soreness (0-10)
+              </span>
+              <input
+                type="number"
+                min={0}
+                max={10}
+                step={1}
+                className="input-field mt-1"
+                value={recoveryForm.soreness}
+                onChange={(event) =>
+                  setRecoveryForm((current) => ({
+                    ...current,
+                    soreness: event.target.value,
+                  }))
+                }
+              />
+            </label>
+            <label className="text-xs">
+              <span className="text-day-text-secondary dark:text-night-text-secondary">
+                Stress (0-10)
+              </span>
+              <input
+                type="number"
+                min={0}
+                max={10}
+                step={1}
+                className="input-field mt-1"
+                value={recoveryForm.stress}
+                onChange={(event) =>
+                  setRecoveryForm((current) => ({
+                    ...current,
+                    stress: event.target.value,
+                  }))
+                }
+              />
+            </label>
+            <label className="text-xs">
+              <span className="text-day-text-secondary dark:text-night-text-secondary">
+                Energy (0-10)
+              </span>
+              <input
+                type="number"
+                min={0}
+                max={10}
+                step={1}
+                className="input-field mt-1"
+                value={recoveryForm.energy}
+                onChange={(event) =>
+                  setRecoveryForm((current) => ({
+                    ...current,
+                    energy: event.target.value,
+                  }))
+                }
+              />
+            </label>
+          </div>
+          <button
+            type="button"
+            disabled={recoverySaving}
+            onClick={() => void submitRecovery()}
+            className="mt-3 rounded-lg bg-day-accent-primary px-4 py-2 text-sm font-semibold text-white disabled:opacity-60 dark:bg-night-accent"
+          >
+            {recoverySaving ? "Saving..." : "Save Recovery Metrics"}
+          </button>
+          {recoveryMessage ? (
+            <p className="mt-2 text-xs text-day-text-secondary dark:text-night-text-secondary">
+              {recoveryMessage}
+            </p>
+          ) : null}
+        </Card>
+
+        <Card className="p-5">
+          <div className="text-sm font-semibold">Injury Report</div>
+          <p className="mt-1 text-xs text-day-text-secondary dark:text-night-text-secondary">
+            Report pain signals to help AI substitute risky movements.
+          </p>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            <label className="text-xs sm:col-span-2">
+              <span className="text-day-text-secondary dark:text-night-text-secondary">
+                Body Region
+              </span>
+              <input
+                className="input-field mt-1"
+                placeholder="e.g. Left shoulder"
+                value={injuryForm.bodyRegion}
+                onChange={(event) =>
+                  setInjuryForm((current) => ({
+                    ...current,
+                    bodyRegion: event.target.value,
+                  }))
+                }
+              />
+            </label>
+            <label className="text-xs">
+              <span className="text-day-text-secondary dark:text-night-text-secondary">
+                Pain Level (0-10)
+              </span>
+              <input
+                type="number"
+                min={0}
+                max={10}
+                step={1}
+                className="input-field mt-1"
+                value={injuryForm.painLevel}
+                onChange={(event) =>
+                  setInjuryForm((current) => ({
+                    ...current,
+                    painLevel: event.target.value,
+                  }))
+                }
+              />
+            </label>
+            <label className="text-xs">
+              <span className="text-day-text-secondary dark:text-night-text-secondary">
+                Severity (1-5)
+              </span>
+              <input
+                type="number"
+                min={1}
+                max={5}
+                step={1}
+                className="input-field mt-1"
+                value={injuryForm.severity}
+                onChange={(event) =>
+                  setInjuryForm((current) => ({
+                    ...current,
+                    severity: event.target.value,
+                  }))
+                }
+              />
+            </label>
+          </div>
+          <button
+            type="button"
+            disabled={injurySaving}
+            onClick={() => void submitInjury()}
+            className="mt-3 rounded-lg border border-day-border px-4 py-2 text-sm font-semibold text-day-text-secondary hover:bg-day-hover disabled:opacity-60 dark:border-night-border dark:text-night-text-secondary dark:hover:bg-night-hover"
+          >
+            {injurySaving ? "Saving..." : "Report Injury"}
+          </button>
+          {injuryMessage ? (
+            <p className="mt-2 text-xs text-day-text-secondary dark:text-night-text-secondary">
+              {injuryMessage}
+            </p>
+          ) : null}
+        </Card>
+      </section>
     </div>
   );
 }

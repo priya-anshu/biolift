@@ -67,7 +67,10 @@ export default function AdminUsersPage() {
   };
 
   useEffect(() => {
-    loadUsers();
+    const handle = window.setTimeout(() => {
+      void loadUsers();
+    }, 0);
+    return () => window.clearTimeout(handle);
   }, []);
 
   const filteredUsers = useMemo(() => {

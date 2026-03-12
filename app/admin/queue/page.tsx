@@ -85,7 +85,10 @@ export default function AdminQueuePage() {
   };
 
   useEffect(() => {
-    loadQueue();
+    const handle = window.setTimeout(() => {
+      void loadQueue();
+    }, 0);
+    return () => window.clearTimeout(handle);
   }, []);
 
   const filtered = useMemo(() => {

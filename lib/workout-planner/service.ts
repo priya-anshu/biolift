@@ -3,7 +3,9 @@ import { buildSmartExercises } from "@/lib/workout-planner/smartPlanner";
 import {
   getNextWorkoutRecommendations,
   type TrainingIntelligenceRequest,
+  type TrainingIntelligenceResult,
 } from "@/lib/workout-planner/intelligenceEngine";
+import { applyTrainingBrain } from "@/lib/workout-planner/trainingBrain";
 import type {
   CalendarStatusRequest,
   CalendarDayStatus,
@@ -17,6 +19,23 @@ type ServiceContext = {
   client: SupabaseClient;
   profileId: string;
 };
+
+type NormalizedRecommendationRequest = {
+  workoutDate: string;
+  planId?: string;
+  dayIndex: number;
+  lookbackDays: number;
+};
+
+export type WorkoutRecommendationRead = {
+  recommendations: TrainingIntelligenceResult;
+  cacheState: "exact" | "plan_fallback" | "baseline";
+};
+
+const RECOMMENDATION_LOOKBACK_MIN = 14;
+const RECOMMENDATION_LOOKBACK_MAX = 90;
+const RECOMMENDATION_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+export const NO_WORKOUT_PLAN_ERROR = "No workout plan available";
 
 type WorkoutPlanInsert = {
   user_id: string;
@@ -35,6 +54,292 @@ function toDayIndex(dateText: string) {
   const date = new Date(`${dateText}T00:00:00`);
   const day = date.getDay();
   return day === 0 ? 7 : day;
+}
+
+function normalizeRecommendationInput(
+  input: TrainingIntelligenceRequest,
+): NormalizedRecommendationRequest {
+  const workoutDate =
+    typeof input.workoutDate === "string" ? input.workoutDate.trim() : "";
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(workoutDate)) {
+    throw new Error("workoutDate must be YYYY-MM-DD");
+  }
+
+  const lookbackDays = clampIntValue(
+    input.lookbackDays ?? 42,
+    RECOMMENDATION_LOOKBACK_MIN,
+    RECOMMENDATION_LOOKBACK_MAX,
+  );
+  const dayIndex = clampIntValue(
+    input.dayIndex ?? toDayIndex(workoutDate),
+    1,
+    7,
+  );
+  const planId =
+    typeof input.planId === "string" && input.planId.trim().length > 0
+      ? input.planId.trim()
+      : undefined;
+
+  return {
+    workoutDate,
+    planId,
+    dayIndex,
+    lookbackDays,
+  };
+}
+
+async function resolvePlanIdForRecommendations(
+  context: ServiceContext,
+  explicitPlanId?: string,
+) {
+  if (explicitPlanId) {
+    return explicitPlanId;
+  }
+
+  const activePlan = await context.client
+    .from("workout_plans")
+    .select("id")
+    .eq("user_id", context.profileId)
+    .eq("is_active", true)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (activePlan.error) {
+    throw new Error(activePlan.error.message);
+  }
+  if (activePlan.data?.id) {
+    return String(activePlan.data.id);
+  }
+
+  const fallbackPlan = await context.client
+    .from("workout_plans")
+    .select("id")
+    .eq("user_id", context.profileId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (fallbackPlan.error) {
+    throw new Error(fallbackPlan.error.message);
+  }
+  if (!fallbackPlan.data?.id) {
+    throw new Error(NO_WORKOUT_PLAN_ERROR);
+  }
+
+  return String(fallbackPlan.data.id);
+}
+
+export function isNoWorkoutPlanError(error: unknown) {
+  return error instanceof Error && error.message === NO_WORKOUT_PLAN_ERROR;
+}
+
+function isMissingRecommendationCacheTable(errorCode: string | null | undefined) {
+  return errorCode === "42P01" || errorCode === "42703";
+}
+
+async function loadCachedWorkoutRecommendations(
+  context: ServiceContext,
+  input: {
+    planId: string;
+    workoutDate: string;
+    dayIndex: number;
+    lookbackDays: number;
+    allowStale?: boolean;
+  },
+) {
+  const cacheRes = await context.client
+    .from("ai_recommendations")
+    .select("result_json,generated_at")
+    .eq("user_id", context.profileId)
+    .eq("plan_id", input.planId)
+    .eq("workout_date", input.workoutDate)
+    .eq("day_index", input.dayIndex)
+    .eq("lookback_days", input.lookbackDays)
+    .limit(1)
+    .maybeSingle();
+
+  if (cacheRes.error) {
+    if (isMissingRecommendationCacheTable(cacheRes.error.code)) {
+      return null;
+    }
+    throw new Error(cacheRes.error.message);
+  }
+
+  if (!cacheRes.data) return null;
+  const generatedAtMs = new Date(String(cacheRes.data.generated_at ?? "")).getTime();
+  const isFresh =
+    Number.isFinite(generatedAtMs) &&
+    Date.now() - generatedAtMs <= RECOMMENDATION_CACHE_MAX_AGE_MS;
+  if (!isFresh && !input.allowStale) return null;
+
+  const payload = cacheRes.data.result_json as TrainingIntelligenceResult | null;
+  if (!payload || typeof payload !== "object") return null;
+  return payload;
+}
+
+async function loadPlanFallbackWorkoutRecommendations(
+  context: ServiceContext,
+  input: { planId: string },
+) {
+  const cacheRes = await context.client
+    .from("ai_recommendations")
+    .select("result_json,generated_at")
+    .eq("user_id", context.profileId)
+    .eq("plan_id", input.planId)
+    .order("generated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (cacheRes.error) {
+    if (isMissingRecommendationCacheTable(cacheRes.error.code)) {
+      return null;
+    }
+    throw new Error(cacheRes.error.message);
+  }
+
+  const payload = cacheRes.data?.result_json as TrainingIntelligenceResult | null;
+  if (!payload || typeof payload !== "object") return null;
+  return payload;
+}
+
+async function buildBaselineWorkoutRecommendations(
+  context: ServiceContext,
+  input: { planId: string; workoutDate: string; dayIndex: number },
+): Promise<TrainingIntelligenceResult> {
+  const dayRowsRes = await context.client
+    .from("workout_plan_exercises")
+    .select(
+      "id,day_index,exercise_order,exercise_id,sets,reps_min,reps_max,rest_seconds",
+    )
+    .eq("plan_id", input.planId)
+    .eq("day_index", input.dayIndex)
+    .order("exercise_order", { ascending: true });
+  if (dayRowsRes.error) {
+    throw new Error(dayRowsRes.error.message);
+  }
+
+  const rows = dayRowsRes.data ?? [];
+
+  if (rows.length === 0) {
+    const fallbackDayRes = await context.client
+      .from("workout_plan_exercises")
+      .select(
+        "id,day_index,exercise_order,exercise_id,sets,reps_min,reps_max,rest_seconds",
+      )
+      .eq("plan_id", input.planId)
+      .order("day_index", { ascending: true })
+      .order("exercise_order", { ascending: true })
+      .limit(100);
+    if (fallbackDayRes.error) {
+      throw new Error(fallbackDayRes.error.message);
+    }
+    const firstDay = fallbackDayRes.data?.[0]?.day_index;
+    const fallbackRows =
+      firstDay === undefined || firstDay === null
+        ? []
+        : (fallbackDayRes.data ?? []).filter((row) => row.day_index === firstDay);
+    return {
+      plan_id: input.planId,
+      workout_date: input.workoutDate,
+      effective_day_index: Number(firstDay ?? input.dayIndex),
+      readiness_band: "yellow",
+      readiness_score: null,
+      fatigue_score: 50,
+      adherence_score: 50,
+      recommendations: fallbackRows.map((row) => ({
+        exercise_id: row.exercise_id ? String(row.exercise_id) : null,
+        original_exercise_id: row.exercise_id ? String(row.exercise_id) : null,
+        plan_exercise_id: String(row.id),
+        recommended_weight: null,
+        recommended_reps: {
+          min: clampIntValue(parseNumeric(row.reps_min, 8), 1, 120),
+          max: clampIntValue(parseNumeric(row.reps_max, 12), 1, 120),
+        },
+        recommended_sets: clampIntValue(parseNumeric(row.sets, 3), 1, 20),
+        rest_seconds: clampIntValue(parseNumeric(row.rest_seconds, 60), 15, 900),
+        exercise_substitution: null,
+        progression_action: "maintain" as const,
+        recommendation_reason: [
+          "Using baseline plan while AI cache is being prepared.",
+        ],
+        metrics: {
+          latest_e1rm: null,
+          weekly_volume_kg: 0,
+          volume_trend_7d_pct: 0,
+          strength_rate_pct_week: null,
+          recent_avg_reps: null,
+          recent_avg_rpe: null,
+          failed_sets_recent: 0,
+        },
+      })),
+    };
+  }
+
+  return {
+    plan_id: input.planId,
+    workout_date: input.workoutDate,
+    effective_day_index: input.dayIndex,
+    readiness_band: "yellow",
+    readiness_score: null,
+    fatigue_score: 50,
+    adherence_score: 50,
+    recommendations: rows.map((row) => ({
+      exercise_id: row.exercise_id ? String(row.exercise_id) : null,
+      original_exercise_id: row.exercise_id ? String(row.exercise_id) : null,
+      plan_exercise_id: String(row.id),
+      recommended_weight: null,
+      recommended_reps: {
+        min: clampIntValue(parseNumeric(row.reps_min, 8), 1, 120),
+        max: clampIntValue(parseNumeric(row.reps_max, 12), 1, 120),
+      },
+      recommended_sets: clampIntValue(parseNumeric(row.sets, 3), 1, 20),
+      rest_seconds: clampIntValue(parseNumeric(row.rest_seconds, 60), 15, 900),
+      exercise_substitution: null,
+      progression_action: "maintain" as const,
+      recommendation_reason: [
+        "Using baseline plan while AI cache is being prepared.",
+      ],
+      metrics: {
+        latest_e1rm: null,
+        weekly_volume_kg: 0,
+        volume_trend_7d_pct: 0,
+        strength_rate_pct_week: null,
+        recent_avg_reps: null,
+        recent_avg_rpe: null,
+        failed_sets_recent: 0,
+      },
+    })),
+  };
+}
+
+async function upsertWorkoutRecommendationCache(
+  context: ServiceContext,
+  input: {
+    planId: string;
+    workoutDate: string;
+    dayIndex: number;
+    lookbackDays: number;
+    result: TrainingIntelligenceResult;
+  },
+) {
+  const upsertRes = await context.client.from("ai_recommendations").upsert(
+    {
+      user_id: context.profileId,
+      plan_id: input.planId,
+      workout_date: input.workoutDate,
+      day_index: input.dayIndex,
+      lookback_days: input.lookbackDays,
+      result_json: input.result,
+      generated_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    },
+    {
+      onConflict: "user_id,plan_id,workout_date,day_index,lookback_days",
+    },
+  );
+
+  if (upsertRes.error && !isMissingRecommendationCacheTable(upsertRes.error.code)) {
+    throw new Error(upsertRes.error.message);
+  }
 }
 
 async function loadExerciseCatalog(
@@ -304,6 +609,14 @@ export async function upsertWorkoutLog(
   context: ServiceContext,
   input: WorkoutLogRequest,
 ) {
+  const nowIso = new Date().toISOString();
+  const shouldSetStartedAt =
+    input.status === "in_progress" || input.status === "completed";
+  const shouldSetCompletedAt =
+    input.status === "completed" ||
+    input.status === "missed" ||
+    input.status === "rest_day";
+
   const payload = {
     user_id: context.profileId,
     workout_date: input.date,
@@ -316,20 +629,12 @@ export async function upsertWorkoutLog(
     calories_burned: input.caloriesBurned ?? 0,
     notes: input.notes ?? null,
     source: input.source ?? "planner",
-    started_at:
-      input.status === "in_progress" || input.status === "completed"
-        ? new Date().toISOString()
-        : null,
-    completed_at:
-      input.status === "completed" || input.status === "missed" || input.status === "rest_day"
-        ? new Date().toISOString()
-        : null,
-    updated_at: new Date().toISOString(),
+    updated_at: nowIso,
   };
 
   const existing = await context.client
     .from("workout_logs")
-    .select("id")
+    .select("id,started_at,completed_at")
     .eq("user_id", context.profileId)
     .eq("workout_date", input.date)
     .eq("source", payload.source)
@@ -342,12 +647,25 @@ export async function upsertWorkoutLog(
   }
 
   if (existing.data?.id) {
+    const existingStartedAt =
+      typeof existing.data.started_at === "string" ? existing.data.started_at : null;
+    const existingCompletedAt =
+      typeof existing.data.completed_at === "string" ? existing.data.completed_at : null;
+
     const updateRes = await context.client
       .from("workout_logs")
-      .update(payload)
+      .update({
+        ...payload,
+        started_at: shouldSetStartedAt
+          ? existingStartedAt ?? nowIso
+          : existingStartedAt,
+        completed_at: shouldSetCompletedAt
+          ? existingCompletedAt ?? nowIso
+          : existingCompletedAt,
+      })
       .eq("id", existing.data.id)
       .eq("user_id", context.profileId)
-      .select("id,workout_date,status,completion_percentage,plan_id")
+      .select("id,workout_date,status,completion_percentage,plan_id,started_at,completed_at")
       .single();
     if (updateRes.error) {
       throw new Error(updateRes.error.message);
@@ -357,8 +675,12 @@ export async function upsertWorkoutLog(
 
   const insertRes = await context.client
     .from("workout_logs")
-    .insert(payload)
-    .select("id,workout_date,status,completion_percentage,plan_id")
+    .insert({
+      ...payload,
+      started_at: shouldSetStartedAt ? nowIso : null,
+      completed_at: shouldSetCompletedAt ? nowIso : null,
+    })
+    .select("id,workout_date,status,completion_percentage,plan_id,started_at,completed_at")
     .single();
   if (insertRes.error) {
     throw new Error(insertRes.error.message);
@@ -367,26 +689,36 @@ export async function upsertWorkoutLog(
 }
 
 async function computeStreak(context: ServiceContext, date: string) {
-  const current = new Date(`${date}T00:00:00`);
-  let streak = 0;
-  for (let offset = 0; offset < 366; offset += 1) {
-    const d = new Date(current);
-    d.setDate(current.getDate() - offset);
-    const isoDate = d.toISOString().slice(0, 10);
-    const rowRes = await context.client
-      .from("calendar_status")
-      .select("status")
-      .eq("user_id", context.profileId)
-      .eq("status_date", isoDate)
-      .maybeSingle();
+  const current = new Date(`${date}T00:00:00Z`);
+  if (Number.isNaN(current.getTime())) return 0;
 
-    if (rowRes.error) {
-      throw new Error(rowRes.error.message);
-    }
-    if (!rowRes.data || rowRes.data.status !== "completed") {
-      break;
-    }
+  const fromDate = new Date(current);
+  fromDate.setUTCDate(fromDate.getUTCDate() - 365);
+
+  const rowsRes = await context.client
+    .from("calendar_status")
+    .select("status_date")
+    .eq("user_id", context.profileId)
+    .eq("status", "completed")
+    .gte("status_date", fromDate.toISOString().slice(0, 10))
+    .lte("status_date", date)
+    .order("status_date", { ascending: false })
+    .limit(366);
+
+  if (rowsRes.error) {
+    throw new Error(rowsRes.error.message);
+  }
+
+  const completedDates = new Set(
+    (rowsRes.data ?? []).map((row) => String(row.status_date)),
+  );
+  let streak = 0;
+  const cursor = new Date(current);
+  while (streak < 366) {
+    const key = cursor.toISOString().slice(0, 10);
+    if (!completedDates.has(key)) break;
     streak += 1;
+    cursor.setUTCDate(cursor.getUTCDate() - 1);
   }
   return streak;
 }
@@ -487,43 +819,6 @@ export async function getMotivationSnapshot(
   }
 
   const activePlan = activePlanRes.data;
-  const todayExercisesRes = activePlan
-    ? await context.client
-        .from("workout_plan_exercises")
-        .select("id,exercise_name,sets,reps_min,reps_max,rest_seconds")
-        .eq("plan_id", activePlan.id)
-        .eq("day_index", todayDayIndex)
-        .order("exercise_order", { ascending: true })
-    : { data: [], error: null };
-  if (todayExercisesRes.error) {
-    throw new Error(todayExercisesRes.error.message);
-  }
-
-  const todayLogRes = await context.client
-    .from("workout_logs")
-    .select(
-      "id,status,completion_percentage,total_exercises,exercises_completed,total_duration_minutes,calories_burned",
-    )
-    .eq("user_id", context.profileId)
-    .eq("workout_date", todayDate)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (todayLogRes.error) {
-    throw new Error(todayLogRes.error.message);
-  }
-
-  const totalCompletedRes = await context.client
-    .from("workout_logs")
-    .select("id", { count: "exact", head: true })
-    .eq("user_id", context.profileId)
-    .eq("status", "completed");
-  if (totalCompletedRes.error) {
-    throw new Error(totalCompletedRes.error.message);
-  }
-
-  const streak = await computeStreak(context, todayDate);
-
   const goalFocus = (activePlan?.goal ?? "general_fitness") as
     | "fat_loss"
     | "hypertrophy"
@@ -531,17 +826,47 @@ export async function getMotivationSnapshot(
     | "general_fitness";
   const languages =
     language === "bi" ? ["bi", "en", "hi"] : [language, "bi", "en"];
-  const messageRes = await context.client
-    .from("motivational_messages")
-    .select("id,language,message,priority")
-    .eq("is_active", true)
-    .in("language", languages)
-    .in("goal_focus", [goalFocus, "general_fitness"])
-    .order("priority", { ascending: false })
-    .limit(20);
-  if (messageRes.error) {
-    throw new Error(messageRes.error.message);
-  }
+
+  const [todayExercisesRes, todayLogRes, totalCompletedRes, streak, messageRes] =
+    await Promise.all([
+      activePlan
+        ? context.client
+            .from("workout_plan_exercises")
+            .select("id,exercise_name,sets,reps_min,reps_max,rest_seconds")
+            .eq("plan_id", activePlan.id)
+            .eq("day_index", todayDayIndex)
+            .order("exercise_order", { ascending: true })
+        : Promise.resolve({ data: [], error: null }),
+      context.client
+        .from("workout_logs")
+        .select(
+          "id,status,completion_percentage,total_exercises,exercises_completed,total_duration_minutes,calories_burned",
+        )
+        .eq("user_id", context.profileId)
+        .eq("workout_date", todayDate)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+      context.client
+        .from("workout_logs")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", context.profileId)
+        .eq("status", "completed"),
+      computeStreak(context, todayDate),
+      context.client
+        .from("motivational_messages")
+        .select("id,language,message,priority")
+        .eq("is_active", true)
+        .in("language", languages)
+        .in("goal_focus", [goalFocus, "general_fitness"])
+        .order("priority", { ascending: false })
+        .limit(20),
+    ]);
+
+  if (todayExercisesRes.error) throw new Error(todayExercisesRes.error.message);
+  if (todayLogRes.error) throw new Error(todayLogRes.error.message);
+  if (totalCompletedRes.error) throw new Error(totalCompletedRes.error.message);
+  if (messageRes.error) throw new Error(messageRes.error.message);
 
   const messages = (messageRes.data ?? []) as Array<{
     id: string;
@@ -588,11 +913,74 @@ export async function getMotivationSnapshot(
 export async function getWorkoutRecommendations(
   context: ServiceContext,
   input: TrainingIntelligenceRequest,
+): Promise<WorkoutRecommendationRead> {
+  const normalized = normalizeRecommendationInput(input);
+  const planId = await resolvePlanIdForRecommendations(context, normalized.planId);
+  const cacheHit = await loadCachedWorkoutRecommendations(context, {
+    planId,
+    workoutDate: normalized.workoutDate,
+    dayIndex: normalized.dayIndex,
+    lookbackDays: normalized.lookbackDays,
+    allowStale: true,
+  });
+  if (cacheHit) {
+    return {
+      recommendations: cacheHit,
+      cacheState: "exact",
+    };
+  }
+
+  const planFallback = await loadPlanFallbackWorkoutRecommendations(context, {
+    planId,
+  });
+  if (planFallback) {
+    return {
+      recommendations: planFallback,
+      cacheState: "plan_fallback",
+    };
+  }
+
+  const baseline = await buildBaselineWorkoutRecommendations(context, {
+    planId,
+    workoutDate: normalized.workoutDate,
+    dayIndex: normalized.dayIndex,
+  });
+  return {
+    recommendations: baseline,
+    cacheState: "baseline",
+  };
+}
+
+export async function primeWorkoutRecommendationCache(
+  context: ServiceContext,
+  input: TrainingIntelligenceRequest,
 ) {
-  return getNextWorkoutRecommendations(
+  const normalized = normalizeRecommendationInput(input);
+  const planId = await resolvePlanIdForRecommendations(context, normalized.planId);
+  const baseResult = await getNextWorkoutRecommendations(
     { client: context.client, profileId: context.profileId },
-    input,
+    {
+      workoutDate: normalized.workoutDate,
+      lookbackDays: normalized.lookbackDays,
+      dayIndex: normalized.dayIndex,
+      planId,
+    },
   );
+  const result = await applyTrainingBrain(
+    { client: context.client, profileId: context.profileId },
+    {
+      workoutDate: normalized.workoutDate,
+      result: baseResult,
+    },
+  );
+  await upsertWorkoutRecommendationCache(context, {
+    planId,
+    workoutDate: normalized.workoutDate,
+    dayIndex: normalized.dayIndex,
+    lookbackDays: normalized.lookbackDays,
+    result,
+  });
+  return result;
 }
 
 function toIsoDateOnly(value: Date) {
@@ -620,14 +1008,22 @@ function parseNumeric(value: unknown, fallback = 0) {
 
 export async function getDashboardSummary(
   context: ServiceContext,
-  input?: { days?: number; recentLimit?: number },
+  input?: {
+    days?: number;
+    recentLimit?: number;
+    includeMotivation?: boolean;
+    language?: "en" | "hi" | "bi";
+  },
 ) {
   const days = clampIntValue(input?.days ?? 7, 1, 60);
   const recentLimit = clampIntValue(input?.recentLimit ?? 6, 1, 30);
   const fromDate = toIsoDateOnly(daysAgoDate(days - 1));
   const fromIso = daysAgoDate(days).toISOString();
+  const motivationPromise = input?.includeMotivation
+    ? getMotivationSnapshot(context, input.language ?? "en")
+    : Promise.resolve(null);
 
-  const [logsRes, goalsRes, heartRes] = await Promise.all([
+  const [logsRes, goalsRes, heartRes, motivation] = await Promise.all([
     context.client
       .from("workout_logs")
       .select(
@@ -650,11 +1046,29 @@ export async function getDashboardSummary(
       .eq("user_id", context.profileId)
       .eq("metric", "heart_rate")
       .gte("recorded_at", fromIso),
+    motivationPromise,
   ]);
 
   if (logsRes.error) throw new Error(logsRes.error.message);
   if (goalsRes.error) throw new Error(goalsRes.error.message);
   if (heartRes.error) throw new Error(heartRes.error.message);
+
+  const statsSnapshotRes = await context.client
+    .from("user_training_stats")
+    .select(
+      "snapshot_date,week_start_date,workouts_completed_7d,weekly_volume_kg,streak_days,fatigue_score,readiness_score,consistency_score,acwr,overtraining_risk,optimal_volume_kg",
+    )
+    .eq("user_id", context.profileId)
+    .order("snapshot_date", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (
+    statsSnapshotRes.error &&
+    statsSnapshotRes.error.code !== "42P01" &&
+    statsSnapshotRes.error.code !== "42703"
+  ) {
+    throw new Error(statsSnapshotRes.error.message);
+  }
 
   const logs = (logsRes.data ?? []) as Array<{
     id: string;
@@ -733,9 +1147,12 @@ export async function getDashboardSummary(
       caloriesBurned,
       activeMinutes,
     },
+    trainingStats:
+      statsSnapshotRes.error || !statsSnapshotRes.data ? null : statsSnapshotRes.data,
     recentActivity,
     goals: goalsRes.data ?? [],
     heartRateAvg,
+    motivation,
   };
 }
 
@@ -746,8 +1163,10 @@ export async function getProgressOverview(
   const days = range === "week" ? 7 : 30;
   const fromDate = toIsoDateOnly(daysAgoDate(days - 1));
   const fromIso = daysAgoDate(days).toISOString();
+  const bodyWeightFromIso = daysAgoDate(range === "week" ? 30 : 120).toISOString();
+  const snapshotFromDate = toIsoDateOnly(daysAgoDate(range === "week" ? 35 : 180));
 
-  const [logsRes, goalsRes, heartRes] = await Promise.all([
+  const [logsRes, goalsRes, heartRes, bodyWeightRes] = await Promise.all([
     context.client
       .from("workout_logs")
       .select(
@@ -769,11 +1188,92 @@ export async function getProgressOverview(
       .eq("user_id", context.profileId)
       .eq("metric", "heart_rate")
       .gte("recorded_at", fromIso),
+    context.client
+      .from("progress_entries")
+      .select("id,value,metric,recorded_at")
+      .eq("user_id", context.profileId)
+      .eq("metric", "body_weight")
+      .gte("recorded_at", bodyWeightFromIso)
+      .order("recorded_at", { ascending: true }),
   ]);
 
   if (logsRes.error) throw new Error(logsRes.error.message);
   if (goalsRes.error) throw new Error(goalsRes.error.message);
   if (heartRes.error) throw new Error(heartRes.error.message);
+  if (bodyWeightRes.error) throw new Error(bodyWeightRes.error.message);
+
+  const [trainingStatsRes, trainingStatsHistoryRes, exerciseStatsRes] = await Promise.all([
+    context.client
+      .from("user_training_stats")
+      .select(
+        "snapshot_date,week_start_date,workouts_completed_7d,weekly_volume_kg,streak_days,fatigue_score,readiness_score,consistency_score,acwr,overtraining_risk,optimal_volume_kg",
+      )
+      .eq("user_id", context.profileId)
+      .order("snapshot_date", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    context.client
+      .from("user_training_stats")
+      .select(
+        "snapshot_date,week_start_date,workouts_completed_7d,weekly_volume_kg,streak_days,consistency_score,readiness_score,acwr,overtraining_risk,optimal_volume_kg",
+      )
+      .eq("user_id", context.profileId)
+      .gte("snapshot_date", snapshotFromDate)
+      .order("snapshot_date", { ascending: true })
+      .limit(range === "week" ? 42 : 220),
+    context.client
+      .from("exercise_volume_stats")
+      .select(
+        "week_start_date,exercise_id,sets_completed,reps_completed,weekly_volume_kg,best_weight_kg,best_estimated_1rm",
+      )
+      .eq("user_id", context.profileId)
+      .order("week_start_date", { ascending: false })
+      .limit(range === "week" ? 30 : 100),
+  ]);
+  if (
+    trainingStatsRes.error &&
+    trainingStatsRes.error.code !== "42P01" &&
+    trainingStatsRes.error.code !== "42703"
+  ) {
+    throw new Error(trainingStatsRes.error.message);
+  }
+  if (
+    trainingStatsHistoryRes.error &&
+    trainingStatsHistoryRes.error.code !== "42P01" &&
+    trainingStatsHistoryRes.error.code !== "42703"
+  ) {
+    throw new Error(trainingStatsHistoryRes.error.message);
+  }
+  if (
+    exerciseStatsRes.error &&
+    exerciseStatsRes.error.code !== "42P01" &&
+    exerciseStatsRes.error.code !== "42703"
+  ) {
+    throw new Error(exerciseStatsRes.error.message);
+  }
+
+  const exerciseVolumeRows = exerciseStatsRes.error ? [] : exerciseStatsRes.data ?? [];
+  const exerciseIds = Array.from(
+    new Set(
+      exerciseVolumeRows
+        .map((row) => String(row.exercise_id ?? ""))
+        .filter(Boolean),
+    ),
+  );
+  const exerciseCatalogRes =
+    exerciseIds.length > 0
+      ? await context.client
+          .from("exercises")
+          .select("id,name")
+          .in("id", exerciseIds)
+      : { data: [], error: null };
+  if (exerciseCatalogRes.error) throw new Error(exerciseCatalogRes.error.message);
+  const exerciseNameById = new Map(
+    (exerciseCatalogRes.data ?? []).map((row) => [
+      String(row.id),
+      String(row.name ?? "Exercise"),
+    ]),
+  );
 
   const logs = (logsRes.data ?? []) as Array<{
     id: string;
@@ -846,6 +1346,17 @@ export async function getProgressOverview(
     workouts,
     goals: goalsRes.data ?? [],
     heartEntries: heartRes.data ?? [],
+    bodyWeightEntries: bodyWeightRes.data ?? [],
+    trainingStatsSnapshot:
+      trainingStatsRes.error || !trainingStatsRes.data ? null : trainingStatsRes.data,
+    trainingStatsHistory:
+      trainingStatsHistoryRes.error || !trainingStatsHistoryRes.data
+        ? []
+        : trainingStatsHistoryRes.data,
+    exerciseVolumeStats: exerciseVolumeRows.map((row) => ({
+      ...row,
+      exercise_name: exerciseNameById.get(String(row.exercise_id ?? "")) ?? null,
+    })),
     stats: {
       workoutsCount,
       caloriesBurned,
@@ -941,7 +1452,7 @@ export async function logManualWorkoutExecution(
       updated_at: nowIso,
     })
     .select(
-      "id,workout_date,status,completion_percentage,total_exercises,exercises_completed,total_duration_minutes,calories_burned,source",
+      "id,plan_id,workout_date,status,completion_percentage,total_exercises,exercises_completed,total_duration_minutes,calories_burned,source",
     )
     .single();
   if (logRes.error || !logRes.data) {
@@ -1005,7 +1516,7 @@ function computeDateStreak(dateKeys: string[]) {
   if (dateKeys.length === 0) return 0;
   const unique = Array.from(new Set(dateKeys)).sort();
   let streak = 0;
-  let cursor = new Date(`${unique[unique.length - 1]}T00:00:00Z`);
+  const cursor = new Date(`${unique[unique.length - 1]}T00:00:00Z`);
   while (true) {
     const key = toIsoDateOnly(cursor);
     if (!unique.includes(key)) break;
@@ -1170,8 +1681,6 @@ export async function refreshLeaderboardForUser(context: ServiceContext) {
 }
 
 export async function getRankingOverview(context: ServiceContext) {
-  await refreshLeaderboardForUser(context);
-
   const leaderboardRes = await context.client
     .from("leaderboard")
     .select(

@@ -3,6 +3,11 @@ import { logger } from "@/lib/server/logger";
 import { getWorkoutPlannerApiContext } from "@/lib/workout-planner/apiContext";
 import { generateSmartPlan } from "@/lib/workout-planner/service";
 import { validatePlannerRequest } from "@/lib/workout-planner/validation";
+import { enqueueAiJob } from "@/lib/workout-planner/workerQueue";
+
+function todayUtcDateKey() {
+  return new Date().toISOString().slice(0, 10);
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -27,6 +32,31 @@ export async function POST(request: NextRequest) {
         planId: result.plan.id,
         exercisesCount: result.exercisesCount,
       },
+    });
+
+    const workoutDate = todayUtcDateKey();
+    void enqueueAiJob(context.adminClient, {
+      userId: context.current.profileId,
+      jobType: "plan_updated",
+      payload: {
+        workoutDate,
+        planId: String(result.plan.id),
+        lookbackDays: 42,
+      },
+      dedupeKey: `plan_updated:${context.current.profileId}:${result.plan.id}:${workoutDate}`,
+    }).catch((cacheError) => {
+      logger.warn({
+        scope: "workout-planner.generate.enqueue",
+        message: "AI worker job enqueue failed",
+        meta: {
+          profileId: context.current.profileId,
+          planId: result.plan.id,
+          error:
+            cacheError instanceof Error
+              ? cacheError.message
+              : "Unknown cache prime error",
+        },
+      });
     });
 
     return NextResponse.json(result);

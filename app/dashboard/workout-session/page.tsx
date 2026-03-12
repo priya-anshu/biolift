@@ -1,11 +1,13 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { motion } from "framer-motion";
-import { Clock3, Loader2, Play, Pause, RefreshCcw, Sparkles } from "lucide-react";
+import { Clock3, Loader2, Play, Pause, RefreshCcw } from "lucide-react";
 import Card from "@/components/ui/Card";
 import Button from "@/components/ui/Button";
 import Badge from "@/components/ui/Badge";
+import PersonalRecordAlert from "@/components/workout/PersonalRecordAlert";
+import WorkoutProgressRing from "@/components/workout/WorkoutProgressRing";
 import type {
   ExerciseRecommendation,
   TrainingIntelligenceResult,
@@ -65,6 +67,9 @@ type SetDraft = {
 type PersonalRecordBadge = {
   workoutLogExerciseId: string;
   setNumber: number;
+  exerciseName: string;
+  weightKg: number | null;
+  reps: number | null;
 };
 
 const actionBadgeClass: Record<ExerciseRecommendation["progression_action"], string> = {
@@ -147,6 +152,10 @@ export default function WorkoutSessionPage() {
   const [restRunning, setRestRunning] = useState(false);
   const [prBadge, setPrBadge] = useState<PersonalRecordBadge | null>(null);
   const [finishing, setFinishing] = useState(false);
+  const [requiresPlan, setRequiresPlan] = useState(false);
+  const [finishNotes, setFinishNotes] = useState("");
+  const [finishCalories, setFinishCalories] = useState("");
+  const [finishMood, setFinishMood] = useState("neutral");
 
   const completed = workoutLog?.status === "completed";
 
@@ -248,57 +257,34 @@ export default function WorkoutSessionPage() {
     setInitializing(true);
     setError(null);
     setNotice(null);
+    setRequiresPlan(false);
     try {
       const workoutDate = todayDateKey();
-      const recRes = await fetch(
-        `/api/workout-planner/recommendations?workoutDate=${workoutDate}&lookbackDays=42`,
+      const sessionRes = await fetch(
+        `/api/workout/session?workoutDate=${workoutDate}&lookbackDays=42`,
         { cache: "no-store" },
       );
-      const recPayload = (await recRes.json()) as {
-        recommendations?: TrainingIntelligenceResult;
-        error?: string;
-      };
-      if (!recRes.ok || !recPayload.recommendations) {
-        throw new Error(recPayload.error ?? "Failed to load recommendations");
-      }
-      setResult(recPayload.recommendations);
-
-      const logRes = await fetch("/api/workout-planner/logs", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          date: workoutDate,
-          planId: recPayload.recommendations.plan_id,
-          status: "in_progress",
-          source: "planner",
-        }),
-      });
-      const logPayload = (await logRes.json()) as {
-        log?: SessionWorkoutLog;
-        error?: string;
-      };
-      if (!logRes.ok || !logPayload.log) {
-        throw new Error(logPayload.error ?? "Failed to create workout log");
-      }
-
-      const startRes = await fetch("/api/workout-session/start", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          workoutLogId: logPayload.log.id,
-          recommendations: recPayload.recommendations.recommendations,
-        }),
-      });
-      const startPayload = (await startRes.json()) as {
+      const sessionPayload = (await sessionRes.json()) as {
         workoutLog?: SessionWorkoutLog;
+        recommendations?: TrainingIntelligenceResult;
         exercises?: Array<Record<string, unknown>>;
+        requiresPlan?: boolean;
         error?: string;
       };
-      if (!startRes.ok) {
-        throw new Error(startPayload.error ?? "Failed to start session");
+      if (!sessionRes.ok) {
+        throw new Error(sessionPayload.error ?? "Failed to initialize workout session");
       }
+      if (sessionPayload.requiresPlan) {
+        setRequiresPlan(true);
+        setWorkoutLog(null);
+        setExercises([]);
+        setSetDrafts({});
+        setResult(null);
+        return;
+      }
+      setResult(sessionPayload.recommendations ?? null);
 
-      const parsedExercises: SessionExercise[] = (startPayload.exercises ?? [])
+      const parsedExercises: SessionExercise[] = (sessionPayload.exercises ?? [])
         .map((row) => ({
           workout_log_exercise_id: String(row.workout_log_exercise_id ?? ""),
           exercise_name: String(row.exercise_name ?? "Exercise"),
@@ -355,7 +341,10 @@ export default function WorkoutSessionPage() {
         }))
         .sort((a, b) => a.exercise_order - b.exercise_order);
 
-      setWorkoutLog(startPayload.workoutLog ?? logPayload.log);
+      if (!sessionPayload.workoutLog) {
+        throw new Error("Missing workout log from session response");
+      }
+      setWorkoutLog(sessionPayload.workoutLog);
       setExercises(parsedExercises);
       hydrateDrafts(parsedExercises);
       setActiveExerciseId(
@@ -364,7 +353,7 @@ export default function WorkoutSessionPage() {
           null,
       );
       setWarmupCompleted(parsedExercises.some((row) => row.completed_sets > 0));
-      setCooldownCompleted((startPayload.workoutLog ?? logPayload.log)?.status === "completed");
+      setCooldownCompleted(sessionPayload.workoutLog.status === "completed");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to initialize");
     } finally {
@@ -403,6 +392,45 @@ export default function WorkoutSessionPage() {
         row.setNumber === setNumber ? updater(row) : row,
       ),
     }));
+  };
+
+  const adjustWeight = (exerciseId: string, setNumber: number, delta: number) => {
+    updateRow(exerciseId, setNumber, (current) => {
+      const currentValue = rowToNumber(current.actualWeightKg) ?? 0;
+      const next = Math.max(0, Math.min(1500, currentValue + delta));
+      return {
+        ...current,
+        actualWeightKg: next.toFixed(1),
+        saved: false,
+        error: null,
+      };
+    });
+  };
+
+  const adjustReps = (exerciseId: string, setNumber: number, delta: number) => {
+    updateRow(exerciseId, setNumber, (current) => {
+      const currentValue = rowToNumber(current.actualReps) ?? 0;
+      const next = Math.max(0, Math.min(200, currentValue + delta));
+      return {
+        ...current,
+        actualReps: String(Math.round(next)),
+        saved: false,
+        error: null,
+      };
+    });
+  };
+
+  const adjustRpe = (exerciseId: string, setNumber: number, delta: number) => {
+    updateRow(exerciseId, setNumber, (current) => {
+      const currentValue = rowToNumber(current.actualRpe) ?? 0;
+      const next = Math.max(0, Math.min(10, currentValue + delta));
+      return {
+        ...current,
+        actualRpe: next.toFixed(1),
+        saved: false,
+        error: null,
+      };
+    });
   };
 
   const addSetRow = (exercise: SessionExercise) => {
@@ -538,8 +566,8 @@ export default function WorkoutSessionPage() {
     }));
 
     try {
-      const response = await fetch("/api/workout-session/sets", {
-        method: "POST",
+      const response = await fetch("/api/workout/session", {
+        method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           workoutLogId: workoutLog.id,
@@ -573,6 +601,9 @@ export default function WorkoutSessionPage() {
         setPrBadge({
           workoutLogExerciseId: exercise.workout_log_exercise_id,
           setNumber: row.setNumber,
+          exerciseName: exercise.exercise_name,
+          weightKg: weight,
+          reps,
         });
       }
     } catch (err) {
@@ -610,7 +641,7 @@ export default function WorkoutSessionPage() {
       error: null,
     }));
     try {
-      const response = await fetch("/api/workout-session/sets", {
+      const response = await fetch("/api/workout/session", {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -649,12 +680,16 @@ export default function WorkoutSessionPage() {
     setError(null);
     setNotice(null);
     try {
-      const response = await fetch("/api/workout-session/finish", {
+      const notes = finishNotes.trim();
+      const response = await fetch("/api/workout/session", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           workoutLogId: workoutLog.id,
           calendarStatus: "completed",
+          caloriesBurned: finishCalories.trim().length > 0 ? Number(finishCalories) : null,
+          notes: notes.length > 0 ? notes : null,
+          workoutMood: finishMood,
         }),
       });
       const payload = (await response.json()) as {
@@ -668,6 +703,9 @@ export default function WorkoutSessionPage() {
       setNotice("Workout completed and saved.");
       setRestRunning(false);
       setRestSeconds(0);
+      setFinishNotes("");
+      setFinishCalories("");
+      setFinishMood("neutral");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to finish workout");
     } finally {
@@ -682,6 +720,25 @@ export default function WorkoutSessionPage() {
         <div className="skeleton h-40 rounded-2xl" />
         <div className="skeleton h-56 rounded-2xl" />
       </div>
+    );
+  }
+
+  if (requiresPlan) {
+    return (
+      <Card className="p-6">
+        <h1 className="text-2xl font-semibold">Workout Session</h1>
+        <p className="mt-2 text-sm text-day-text-secondary dark:text-night-text-secondary">
+          Generate your first workout plan before starting a session.
+        </p>
+        <div className="mt-4">
+          <Link
+            href="/dashboard/workout-planner"
+            className="rounded-lg bg-day-accent-primary px-4 py-2 text-sm font-semibold text-white dark:bg-night-accent"
+          >
+            Generate Your First Workout Plan
+          </Link>
+        </div>
+      </Card>
     );
   }
 
@@ -701,6 +758,13 @@ export default function WorkoutSessionPage() {
 
   return (
     <div className="space-y-5">
+      <PersonalRecordAlert
+        visible={Boolean(prBadge)}
+        exerciseName={prBadge?.exerciseName}
+        weightKg={prBadge?.weightKg}
+        reps={prBadge?.reps}
+      />
+
       <Card className="p-5 sm:p-6">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
@@ -734,10 +798,16 @@ export default function WorkoutSessionPage() {
 
         <div className="mt-4 grid gap-3 sm:grid-cols-3">
           <div className="rounded-xl border border-day-border bg-day-hover/70 p-3 dark:border-night-border dark:bg-night-hover/50">
-            <p className="text-xs text-day-text-secondary dark:text-night-text-secondary">Progress</p>
-            <p className="mt-1 text-lg font-semibold">
-              {progress.doneSets}/{progress.targetSets} sets
+            <p className="text-xs text-day-text-secondary dark:text-night-text-secondary">
+              Progress
             </p>
+            <div className="mt-2">
+              <WorkoutProgressRing
+                completedSets={progress.doneSets}
+                totalSets={progress.targetSets}
+                size={88}
+              />
+            </div>
           </div>
           <div className="rounded-xl border border-day-border bg-day-hover/70 p-3 dark:border-night-border dark:bg-night-hover/50">
             <p className="text-xs text-day-text-secondary dark:text-night-text-secondary">
@@ -811,6 +881,51 @@ export default function WorkoutSessionPage() {
           <p className="mt-3 text-sm text-emerald-600 dark:text-emerald-400">{notice}</p>
         ) : null}
         {error ? <p className="mt-2 text-sm text-red-600 dark:text-red-400">{error}</p> : null}
+
+        {!completed ? (
+          <div className="mt-4 grid gap-3 rounded-xl border border-day-border bg-day-hover/60 p-3 dark:border-night-border dark:bg-night-hover/50 sm:grid-cols-3">
+            <label className="space-y-1 text-xs">
+              <span className="text-day-text-secondary dark:text-night-text-secondary">
+                Workout Mood
+              </span>
+              <select
+                className="input-field"
+                value={finishMood}
+                onChange={(event) => setFinishMood(event.target.value)}
+              >
+                <option value="great">Great</option>
+                <option value="good">Good</option>
+                <option value="neutral">Neutral</option>
+                <option value="low">Low Energy</option>
+              </select>
+            </label>
+            <label className="space-y-1 text-xs">
+              <span className="text-day-text-secondary dark:text-night-text-secondary">
+                Calories Burned (optional)
+              </span>
+              <input
+                className="input-field"
+                type="number"
+                min={0}
+                max={100000}
+                value={finishCalories}
+                onChange={(event) => setFinishCalories(event.target.value)}
+              />
+            </label>
+            <label className="space-y-1 text-xs sm:col-span-3">
+              <span className="text-day-text-secondary dark:text-night-text-secondary">
+                Notes (optional)
+              </span>
+              <textarea
+                rows={2}
+                className="input-field"
+                value={finishNotes}
+                onChange={(event) => setFinishNotes(event.target.value)}
+                placeholder="How did the session feel?"
+              />
+            </label>
+          </div>
+        ) : null}
       </Card>
 
       <Card className="p-4 sm:p-5">
@@ -896,48 +1011,114 @@ export default function WorkoutSessionPage() {
                   <div className="md:col-span-2">
                     <p className="text-xs font-semibold">Set {row.setNumber}</p>
                   </div>
-                  <input
-                    className="input-field md:col-span-2"
-                    placeholder="Weight"
-                    value={row.actualWeightKg}
-                    disabled={row.saving || completed || !canStartExercises}
-                    onChange={(event) =>
-                      updateRow(exercise.workout_log_exercise_id, row.setNumber, (current) => ({
-                        ...current,
-                        actualWeightKg: event.target.value,
-                        saved: false,
-                        error: null,
-                      }))
-                    }
-                  />
-                  <input
-                    className="input-field md:col-span-2"
-                    placeholder="Reps"
-                    value={row.actualReps}
-                    disabled={row.saving || completed || !canStartExercises}
-                    onChange={(event) =>
-                      updateRow(exercise.workout_log_exercise_id, row.setNumber, (current) => ({
-                        ...current,
-                        actualReps: event.target.value,
-                        saved: false,
-                        error: null,
-                      }))
-                    }
-                  />
-                  <input
-                    className="input-field md:col-span-2"
-                    placeholder="RPE (optional)"
-                    value={row.actualRpe}
-                    disabled={row.saving || completed || !canStartExercises}
-                    onChange={(event) =>
-                      updateRow(exercise.workout_log_exercise_id, row.setNumber, (current) => ({
-                        ...current,
-                        actualRpe: event.target.value,
-                        saved: false,
-                        error: null,
-                      }))
-                    }
-                  />
+                  <div className="md:col-span-2 flex items-center gap-1">
+                    <button
+                      type="button"
+                      className="rounded-lg border border-day-border px-2 py-1 text-xs dark:border-night-border"
+                      disabled={row.saving || completed || !canStartExercises}
+                      onClick={() => adjustWeight(exercise.workout_log_exercise_id, row.setNumber, -2.5)}
+                    >
+                      -
+                    </button>
+                    <input
+                      className="input-field flex-1"
+                      type="number"
+                      min={0}
+                      max={1500}
+                      step={0.1}
+                      placeholder="Weight"
+                      value={row.actualWeightKg}
+                      disabled={row.saving || completed || !canStartExercises}
+                      onChange={(event) =>
+                        updateRow(exercise.workout_log_exercise_id, row.setNumber, (current) => ({
+                          ...current,
+                          actualWeightKg: event.target.value,
+                          saved: false,
+                          error: null,
+                        }))
+                      }
+                    />
+                    <button
+                      type="button"
+                      className="rounded-lg border border-day-border px-2 py-1 text-xs dark:border-night-border"
+                      disabled={row.saving || completed || !canStartExercises}
+                      onClick={() => adjustWeight(exercise.workout_log_exercise_id, row.setNumber, 2.5)}
+                    >
+                      +
+                    </button>
+                  </div>
+                  <div className="md:col-span-2 flex items-center gap-1">
+                    <button
+                      type="button"
+                      className="rounded-lg border border-day-border px-2 py-1 text-xs dark:border-night-border"
+                      disabled={row.saving || completed || !canStartExercises}
+                      onClick={() => adjustReps(exercise.workout_log_exercise_id, row.setNumber, -1)}
+                    >
+                      -
+                    </button>
+                    <input
+                      className="input-field flex-1"
+                      type="number"
+                      min={0}
+                      max={200}
+                      step={1}
+                      placeholder="Reps"
+                      value={row.actualReps}
+                      disabled={row.saving || completed || !canStartExercises}
+                      onChange={(event) =>
+                        updateRow(exercise.workout_log_exercise_id, row.setNumber, (current) => ({
+                          ...current,
+                          actualReps: event.target.value,
+                          saved: false,
+                          error: null,
+                        }))
+                      }
+                    />
+                    <button
+                      type="button"
+                      className="rounded-lg border border-day-border px-2 py-1 text-xs dark:border-night-border"
+                      disabled={row.saving || completed || !canStartExercises}
+                      onClick={() => adjustReps(exercise.workout_log_exercise_id, row.setNumber, 1)}
+                    >
+                      +
+                    </button>
+                  </div>
+                  <div className="md:col-span-2 flex items-center gap-1">
+                    <button
+                      type="button"
+                      className="rounded-lg border border-day-border px-2 py-1 text-xs dark:border-night-border"
+                      disabled={row.saving || completed || !canStartExercises}
+                      onClick={() => adjustRpe(exercise.workout_log_exercise_id, row.setNumber, -0.5)}
+                    >
+                      -
+                    </button>
+                    <input
+                      className="input-field flex-1"
+                      type="number"
+                      min={0}
+                      max={10}
+                      step={0.1}
+                      placeholder="RPE (optional)"
+                      value={row.actualRpe}
+                      disabled={row.saving || completed || !canStartExercises}
+                      onChange={(event) =>
+                        updateRow(exercise.workout_log_exercise_id, row.setNumber, (current) => ({
+                          ...current,
+                          actualRpe: event.target.value,
+                          saved: false,
+                          error: null,
+                        }))
+                      }
+                    />
+                    <button
+                      type="button"
+                      className="rounded-lg border border-day-border px-2 py-1 text-xs dark:border-night-border"
+                      disabled={row.saving || completed || !canStartExercises}
+                      onClick={() => adjustRpe(exercise.workout_log_exercise_id, row.setNumber, 0.5)}
+                    >
+                      +
+                    </button>
+                  </div>
                   <select
                     className="input-field md:col-span-2"
                     value={row.setStatus}
@@ -983,17 +1164,6 @@ export default function WorkoutSessionPage() {
                   <p className="mt-2 text-[11px] text-day-text-secondary dark:text-night-text-secondary">
                     Saved at {new Date(row.performedAt).toLocaleTimeString()}
                   </p>
-                ) : null}
-                {prBadge?.workoutLogExerciseId === exercise.workout_log_exercise_id &&
-                prBadge?.setNumber === row.setNumber ? (
-                  <motion.div
-                    initial={{ opacity: 0, y: 8, scale: 0.95 }}
-                    animate={{ opacity: 1, y: 0, scale: 1 }}
-                    className="mt-2 inline-flex items-center gap-1 rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-700 dark:bg-amber-900/30 dark:text-amber-300"
-                  >
-                    <Sparkles className="h-3.5 w-3.5" />
-                    New Personal Record!
-                  </motion.div>
                 ) : null}
               </div>
             ))}

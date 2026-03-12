@@ -1,9 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getWorkoutPlannerApiContext } from "@/lib/workout-planner/apiContext";
-import {
-  logManualWorkoutExecution,
-  refreshLeaderboardForUser,
-} from "@/lib/workout-planner/service";
+import { logManualWorkoutExecution } from "@/lib/workout-planner/service";
+import { enqueueAiJob } from "@/lib/workout-planner/workerQueue";
 
 type Payload = {
   name?: unknown;
@@ -55,10 +53,20 @@ export async function POST(request: NextRequest) {
       },
     );
 
-    await refreshLeaderboardForUser({
-      client: api.adminClient,
-      profileId: api.current.profileId,
-    });
+    void enqueueAiJob(api.adminClient, {
+      userId: api.current.profileId,
+      jobType: "manual_workout_logged",
+      payload: {
+        workoutLogId: String(workout.id),
+        workoutDate: String(workout.workout_date),
+        planId:
+          typeof workout.plan_id === "string" && workout.plan_id.length > 0
+            ? workout.plan_id
+            : undefined,
+        lookbackDays: 42,
+      },
+      dedupeKey: `manual_workout_logged:${api.current.profileId}:${workout.id}`,
+    }).catch(() => {});
 
     return NextResponse.json({ workout });
   } catch (error) {

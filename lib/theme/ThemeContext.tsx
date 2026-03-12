@@ -19,19 +19,13 @@ export function useTheme() {
 }
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [isDarkMode, setIsDarkMode] = useState(false);
+  const [isDarkMode, setIsDarkMode] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return window.localStorage.getItem("biolift-theme") === "dark";
+  });
 
   useEffect(() => {
-    const saved = localStorage.getItem("biolift-theme");
-    if (saved) {
-      setIsDarkMode(saved === "dark");
-      return;
-    }
-    setIsDarkMode(false);
-  }, []);
-
-  useEffect(() => {
-    localStorage.setItem("biolift-theme", isDarkMode ? "dark" : "light");
+    window.localStorage.setItem("biolift-theme", isDarkMode ? "dark" : "light");
     document.documentElement.classList.toggle("dark", isDarkMode);
   }, [isDarkMode]);
 

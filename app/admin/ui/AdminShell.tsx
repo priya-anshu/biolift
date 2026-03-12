@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Bell,
   ChevronDown,
@@ -80,7 +80,7 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
     return () => document.removeEventListener("mousedown", onMouseDown);
   }, [isUserMenuOpen]);
 
-  const displayName = useMemo(() => {
+  const displayName = (() => {
     if (identity?.name && identity.name.trim().length > 0) return identity.name;
     const fromUser =
       (user?.user_metadata?.name as string | undefined) ??
@@ -89,7 +89,7 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
     if (identity?.email) return identity.email.split("@")[0];
     if (user?.email) return user.email.split("@")[0];
     return "Admin";
-  }, [identity?.email, identity?.name, user?.email, user?.user_metadata]);
+  })();
 
   const displayEmail = identity?.email ?? user?.email ?? "admin@biolift.com";
   const avatarUrl =

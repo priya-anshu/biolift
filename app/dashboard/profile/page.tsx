@@ -17,7 +17,6 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { supabase } from "@/lib/supabase/client";
 import { useAuth } from "@/lib/auth/AuthContext";
 
 const sectionVariants = {
@@ -52,6 +51,21 @@ type ProfileSettings = {
   timezone: string;
   units: "metric" | "imperial";
   date_format: "MM/DD/YYYY" | "DD/MM/YYYY";
+};
+
+type ProfileStats = {
+  workoutsCompleted: number;
+  daysActive: number;
+  achievements: number;
+  currentStreak: number;
+};
+
+type ProfileOverviewResponse = {
+  profile: Profile;
+  settings: ProfileSettings;
+  settingsAvailable: boolean;
+  stats: ProfileStats;
+  error?: string;
 };
 
 const defaultProfileSettings: ProfileSettings = {
@@ -182,6 +196,12 @@ export default function ProfilePage() {
   const [settingsLoading, setSettingsLoading] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [settingsMessage, setSettingsMessage] = useState<string | null>(null);
+  const [profileStats, setProfileStats] = useState<ProfileStats>({
+    workoutsCompleted: 0,
+    daysActive: 0,
+    achievements: 0,
+    currentStreak: 0,
+  });
   const [editData, setEditData] = useState({
     name: "",
     email: "",
@@ -218,84 +238,36 @@ export default function ProfilePage() {
   useEffect(() => {
     if (!user) return;
     const loadProfile = async () => {
-      let data:
-        | {
-            id: string;
-            name: string | null;
-            email: string | null;
-            avatar_url: string | null;
-            rank?: string | null;
-            membership?: string | null;
-            level?: string | null;
-            points?: number | null;
-          }
-        | null = null;
-
-      const byAuthUser = await supabase
-        .from("profiles")
-        .select("id,name,email,avatar_url")
-        .eq("auth_user_id", user.id)
-        .maybeSingle();
-
-      if (!byAuthUser.error) {
-        data = byAuthUser.data;
-      } else {
-        // Fallback for deployments where profiles.id is auth.users.id and auth_user_id column is absent.
-        const byId = await supabase
-          .from("profiles")
-          .select("id,name,email,avatar_url")
-          .eq("id", user.id)
-          .maybeSingle();
-        data = byId.data;
-      }
-      const profileData = {
-        id: data?.id ?? "",
-        name: data?.name ?? user.user_metadata?.name ?? user.user_metadata?.full_name ?? "",
-        email: data?.email ?? user.email ?? "",
-        avatar_url: data?.avatar_url ?? user.user_metadata?.avatar_url ?? null,
-        rank: data?.rank ?? "Rookie",
-        membership: data?.membership ?? "free",
-        level: data?.level ?? "beginner",
-        points: data?.points ?? 0,
-      };
-      setProfile(profileData);
-      setEditData((prev) => ({
-        ...prev,
-        name: profileData.name ?? "",
-        email: profileData.email ?? "",
-      }));
-    };
-    loadProfile();
-  }, [user]);
-
-  useEffect(() => {
-    if (!profile?.id) return;
-    const loadSettings = async () => {
       setSettingsLoading(true);
       setSettingsMessage(null);
-      const { data, error } = await supabase
-        .from("profile_settings")
-        .select(
-          "two_factor_enabled,login_alerts,profile_visibility,data_sharing_analytics,notify_workout_reminders,notify_progress_milestones,notify_social_updates,notify_marketing,billing_plan,auto_renew,currency,language,timezone,units,date_format",
-        )
-        .eq("user_id", profile.id)
-        .maybeSingle();
-
-      if (error) {
+      try {
+        const response = await fetch("/api/profile/overview", { cache: "no-store" });
+        const payload = (await response.json()) as ProfileOverviewResponse;
+        if (!response.ok || payload.error) {
+          throw new Error(payload.error ?? "Failed to load profile");
+        }
+        const profileData = payload.profile;
+        setProfile(profileData);
+        setSettings({ ...defaultProfileSettings, ...payload.settings });
+        setProfileStats(payload.stats);
+        if (!payload.settingsAvailable) {
+          setSettingsMessage("Settings table is not ready yet. Run profile_settings SQL first.");
+        }
+        setEditData((prev) => ({
+          ...prev,
+          name: profileData.name ?? "",
+          email: profileData.email ?? "",
+        }));
+      } catch (error) {
+        setSettingsMessage(
+          error instanceof Error ? error.message : "Failed to load profile overview.",
+        );
+      } finally {
         setSettingsLoading(false);
-        setSettingsMessage("Settings table is not ready yet. Run profile_settings SQL first.");
-        return;
       }
-
-      if (data) {
-        setSettings({ ...defaultProfileSettings, ...data });
-      } else {
-        setSettings(defaultProfileSettings);
-      }
-      setSettingsLoading(false);
     };
-    loadSettings();
-  }, [profile?.id]);
+    void loadProfile();
+  }, [user]);
 
   useEffect(() => {
     if (!activeSettings) return;
@@ -317,14 +289,32 @@ export default function ProfilePage() {
   }, [profile?.name]);
 
   const stats = [
-    { label: "Workouts Completed", value: "127", icon: Target },
-    { label: "Days Active", value: "45", icon: Calendar },
-    { label: "Achievements", value: "23", icon: Award },
-    { label: "Current Streak", value: "7", icon: Award },
+    { label: "Workouts Completed", value: String(profileStats.workoutsCompleted), icon: Target },
+    { label: "Days Active", value: String(profileStats.daysActive), icon: Calendar },
+    { label: "Achievements", value: String(profileStats.achievements), icon: Award },
+    { label: "Current Streak", value: String(profileStats.currentStreak), icon: Award },
   ];
 
-  const handleSave = () => {
-    setIsEditing(false);
+  const handleSave = async () => {
+    if (!profile?.id) return;
+    setSettingsMessage(null);
+    try {
+      const response = await fetch("/api/profile/overview", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: editData.name }),
+      });
+      const payload = (await response.json()) as ProfileOverviewResponse;
+      if (!response.ok || payload.error) {
+        throw new Error(payload.error ?? "Failed to save profile");
+      }
+      setProfile(payload.profile);
+      setIsEditing(false);
+    } catch (error) {
+      setSettingsMessage(
+        error instanceof Error ? error.message : "Could not save profile.",
+      );
+    }
   };
 
   const handleCancel = () => {
@@ -345,31 +335,29 @@ export default function ProfilePage() {
   };
 
   const handleSaveSettings = async () => {
-    if (!profile?.id) {
-      setSettingsMessage(
-        "Profile row not found for this account. Sign out/in once, then retry.",
-      );
-      return;
-    }
     setSettingsSaving(true);
     setSettingsMessage(null);
-    const payload = {
-      user_id: profile.id,
-      ...settings,
-      updated_at: new Date().toISOString(),
-    };
-    const { error } = await supabase.from("profile_settings").upsert(payload, {
-      onConflict: "user_id",
-    });
-    setSettingsSaving(false);
-    if (error) {
-      console.error("Failed to save profile settings:", error);
+    try {
+      const response = await fetch("/api/profile/overview", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ settings }),
+      });
+      const payload = (await response.json()) as ProfileOverviewResponse;
+      if (!response.ok || payload.error) {
+        throw new Error(payload.error ?? "Could not save settings");
+      }
+      setProfile(payload.profile);
+      setSettings({ ...defaultProfileSettings, ...payload.settings });
+      setProfileStats(payload.stats);
+      setSettingsMessage("Settings saved successfully.");
+    } catch (error) {
+      setSettingsMessage(
+        error instanceof Error ? `Could not save settings: ${error.message}` : "Could not save settings.",
+      );
+    } finally {
+      setSettingsSaving(false);
     }
-    setSettingsMessage(
-      error
-        ? `Could not save settings: ${error.message}`
-        : "Settings saved successfully.",
-    );
   };
 
   const handleSignOut = async () => {

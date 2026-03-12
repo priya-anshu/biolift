@@ -388,14 +388,19 @@ async function loadLogExercises(
   logIds: string[],
 ): Promise<LogExerciseRow[]> {
   if (logIds.length === 0) return [];
+  const chunks = chunk(logIds, 250);
+  const results = await Promise.all(
+    chunks.map((ids) =>
+      context.client
+        .from("workout_log_exercises")
+        .select("id,workout_log_id,exercise_id,exercise_name,created_at")
+        .eq("user_id", context.profileId)
+        .in("workout_log_id", ids)
+        .order("created_at", { ascending: false }),
+    ),
+  );
   const out: LogExerciseRow[] = [];
-  for (const ids of chunk(logIds, 250)) {
-    const res = await context.client
-      .from("workout_log_exercises")
-      .select("id,workout_log_id,exercise_id,exercise_name,created_at")
-      .eq("user_id", context.profileId)
-      .in("workout_log_id", ids)
-      .order("created_at", { ascending: false });
+  results.forEach((res) => {
     if (res.error) throw new Error(res.error.message);
     out.push(
       ...(res.data ?? []).map((row) => ({
@@ -406,7 +411,7 @@ async function loadLogExercises(
         created_at: String(row.created_at ?? new Date().toISOString()),
       })),
     );
-  }
+  });
   return out;
 }
 
@@ -415,16 +420,21 @@ async function loadSetRows(
   workoutLogExerciseIds: string[],
 ): Promise<SetRow[]> {
   if (workoutLogExerciseIds.length === 0) return [];
+  const chunks = chunk(workoutLogExerciseIds, 250);
+  const results = await Promise.all(
+    chunks.map((ids) =>
+      context.client
+        .from("workout_log_sets")
+        .select(
+          "workout_log_exercise_id,actual_reps,actual_weight_kg,actual_rpe,set_status,performed_at",
+        )
+        .eq("user_id", context.profileId)
+        .in("workout_log_exercise_id", ids)
+        .order("performed_at", { ascending: false }),
+    ),
+  );
   const out: SetRow[] = [];
-  for (const ids of chunk(workoutLogExerciseIds, 250)) {
-    const res = await context.client
-      .from("workout_log_sets")
-      .select(
-        "workout_log_exercise_id,actual_reps,actual_weight_kg,actual_rpe,set_status,performed_at",
-      )
-      .eq("user_id", context.profileId)
-      .in("workout_log_exercise_id", ids)
-      .order("performed_at", { ascending: false });
+  results.forEach((res) => {
     if (res.error) throw new Error(res.error.message);
     out.push(
       ...(res.data ?? []).map((row) => ({
@@ -436,7 +446,7 @@ async function loadSetRows(
         performed_at: String(row.performed_at ?? new Date().toISOString()),
       })),
     );
-  }
+  });
   return out;
 }
 
@@ -469,14 +479,19 @@ async function loadPersonalRecords(
   exerciseIds: string[],
 ): Promise<PersonalRecordRow[]> {
   if (exerciseIds.length === 0) return [];
+  const chunks = chunk(exerciseIds, 250);
+  const results = await Promise.all(
+    chunks.map((ids) =>
+      context.client
+        .from("personal_records")
+        .select("exercise_id,estimated_1rm,achieved_at")
+        .eq("user_id", context.profileId)
+        .in("exercise_id", ids)
+        .order("achieved_at", { ascending: false }),
+    ),
+  );
   const out: PersonalRecordRow[] = [];
-  for (const ids of chunk(exerciseIds, 250)) {
-    const res = await context.client
-      .from("personal_records")
-      .select("exercise_id,estimated_1rm,achieved_at")
-      .eq("user_id", context.profileId)
-      .in("exercise_id", ids)
-      .order("achieved_at", { ascending: false });
+  results.forEach((res) => {
     if (res.error) throw new Error(res.error.message);
     out.push(
       ...(res.data ?? []).map((row) => ({
@@ -485,7 +500,7 @@ async function loadPersonalRecords(
         achieved_at: String(row.achieved_at ?? new Date().toISOString()),
       })),
     );
-  }
+  });
   return out;
 }
 
@@ -973,7 +988,19 @@ export async function getNextWorkoutRecommendations(
     };
   }
 
-  const logs = await loadWorkoutLogs(context, lookbackDate);
+  const exerciseIds = Array.from(
+    new Set(day.rows.map((r) => r.exercise_id).filter((x): x is string => Boolean(x))),
+  );
+
+  const [logs, prs, recovery, injuries, globalSets, catalog] = await Promise.all([
+    loadWorkoutLogs(context, lookbackDate),
+    loadPersonalRecords(context, exerciseIds),
+    loadRecoveryRows(context, recoveryDate),
+    loadActiveInjuries(context),
+    loadGlobalSetsForFatigue(context, daysAgo(analysisDate, 28).toISOString()),
+    loadCatalog(context, day.rows.map((r) => r.muscle_group)),
+  ]);
+
   const logExercises = await loadLogExercises(
     context,
     logs.map((l) => l.id),
@@ -985,18 +1012,6 @@ export async function getNextWorkoutRecommendations(
     context,
     relevantLogExercises.map((r) => r.id),
   );
-
-  const exerciseIds = Array.from(
-    new Set(day.rows.map((r) => r.exercise_id).filter((x): x is string => Boolean(x))),
-  );
-
-  const [prs, recovery, injuries, globalSets, catalog] = await Promise.all([
-    loadPersonalRecords(context, exerciseIds),
-    loadRecoveryRows(context, recoveryDate),
-    loadActiveInjuries(context),
-    loadGlobalSetsForFatigue(context, daysAgo(analysisDate, 28).toISOString()),
-    loadCatalog(context, day.rows.map((r) => r.muscle_group)),
-  ]);
 
   const fatigue = fatigueSummary(globalSets, recovery, analysisDate);
   const adherence = adherenceScore(logs, analysisDate);

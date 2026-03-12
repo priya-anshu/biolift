@@ -1,6 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getWorkoutPlannerApiContext } from "@/lib/workout-planner/apiContext";
-import { getWorkoutRecommendations } from "@/lib/workout-planner/service";
+import {
+  getWorkoutRecommendations,
+  isNoWorkoutPlanError,
+} from "@/lib/workout-planner/service";
+import {
+  checkRecommendationCacheTTL,
+  enqueueAiJob,
+} from "@/lib/workout-planner/workerQueue";
 
 function todayUtcDateKey() {
   return new Date().toISOString().slice(0, 10);
@@ -79,6 +86,25 @@ function toErrorResponse(error: unknown, fallback: string) {
   return NextResponse.json({ error: message }, { status });
 }
 
+function buildDedupeKey(
+  profileId: string,
+  input: {
+    workoutDate: string;
+    planId?: string;
+    dayIndex?: number;
+    lookbackDays?: number;
+  },
+) {
+  return [
+    "recommendation_refresh",
+    profileId,
+    input.planId ?? "active",
+    input.workoutDate,
+    String(input.dayIndex ?? "auto"),
+    String(input.lookbackDays ?? 42),
+  ].join(":");
+}
+
 export async function GET(request: NextRequest) {
   try {
     const api = await getWorkoutPlannerApiContext({
@@ -94,12 +120,48 @@ export async function GET(request: NextRequest) {
       lookbackDays: request.nextUrl.searchParams.get("lookbackDays"),
     });
 
-    const recommendations = await getWorkoutRecommendations(
-      { client: api.client, profileId: api.current.profileId },
-      parsed,
-    );
+    let recommendationRead;
+    try {
+      recommendationRead = await getWorkoutRecommendations(
+        { client: api.client, profileId: api.current.profileId },
+        parsed,
+      );
+    } catch (error) {
+      if (isNoWorkoutPlanError(error)) {
+        return NextResponse.json({
+          requiresPlan: true,
+          recommendations: null,
+          cacheState: "baseline",
+          cacheTtl: null,
+        });
+      }
+      throw error;
+    }
 
-    return NextResponse.json({ recommendations });
+    const ttl = await checkRecommendationCacheTTL(api.client, {
+      userId: api.current.profileId,
+      workoutDate: parsed.workoutDate,
+      planId: parsed.planId,
+      dayIndex: parsed.dayIndex,
+      lookbackDays: parsed.lookbackDays,
+    });
+    const shouldEnqueue =
+      recommendationRead.cacheState !== "exact" || (ttl.exists && ttl.isStale);
+
+    if (shouldEnqueue) {
+      void enqueueAiJob(api.adminClient, {
+        userId: api.current.profileId,
+        jobType: "recommendation_refresh",
+        payload: parsed,
+        dedupeKey: buildDedupeKey(api.current.profileId, parsed),
+      }).catch(() => {});
+    }
+
+    return NextResponse.json({
+      recommendations: recommendationRead.recommendations,
+      cacheState: recommendationRead.cacheState,
+      cacheTtl: ttl,
+    });
   } catch (error) {
     return toErrorResponse(error, "Failed to generate recommendations");
   }
@@ -122,14 +184,49 @@ export async function POST(request: NextRequest) {
 
     const parsed = parseRequestInput(payload);
 
-    const recommendations = await getWorkoutRecommendations(
-      { client: api.client, profileId: api.current.profileId },
-      parsed,
-    );
+    let recommendationRead;
+    try {
+      recommendationRead = await getWorkoutRecommendations(
+        { client: api.client, profileId: api.current.profileId },
+        parsed,
+      );
+    } catch (error) {
+      if (isNoWorkoutPlanError(error)) {
+        return NextResponse.json({
+          requiresPlan: true,
+          recommendations: null,
+          cacheState: "baseline",
+          cacheTtl: null,
+        });
+      }
+      throw error;
+    }
 
-    return NextResponse.json({ recommendations });
+    const ttl = await checkRecommendationCacheTTL(api.client, {
+      userId: api.current.profileId,
+      workoutDate: parsed.workoutDate,
+      planId: parsed.planId,
+      dayIndex: parsed.dayIndex,
+      lookbackDays: parsed.lookbackDays,
+    });
+    const shouldEnqueue =
+      recommendationRead.cacheState !== "exact" || (ttl.exists && ttl.isStale);
+
+    if (shouldEnqueue) {
+      void enqueueAiJob(api.adminClient, {
+        userId: api.current.profileId,
+        jobType: "recommendation_refresh",
+        payload: parsed,
+        dedupeKey: buildDedupeKey(api.current.profileId, parsed),
+      }).catch(() => {});
+    }
+
+    return NextResponse.json({
+      recommendations: recommendationRead.recommendations,
+      cacheState: recommendationRead.cacheState,
+      cacheTtl: ttl,
+    });
   } catch (error) {
     return toErrorResponse(error, "Failed to generate recommendations");
   }
 }
-

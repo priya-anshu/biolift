@@ -4,7 +4,6 @@ import Link from "next/link";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
 import {
-  Apple,
   Bell,
   CalendarCheck,
   ChevronDown,
@@ -83,8 +82,7 @@ export default function DashboardHeader() {
     { href: "/dashboard", label: "Dashboard", icon: LayoutGrid },
     { href: "/dashboard/workout-session", label: "Workout", icon: Dumbbell },
     { href: "/dashboard/progress", label: "Progress", icon: LineChart },
-    { href: "/dashboard/ranking", label: "Ranking", icon: Trophy },
-    { href: "/dashboard/diet", label: "Diet", icon: Apple },
+    { href: "/dashboard/ranking", label: "Leaderboard", icon: Trophy },
     { href: "/dashboard/profile", label: "Profile", icon: User },
     ...(ENABLE_SOCIAL_NAV ? [{ href: "/dashboard/social", label: "Social", icon: Users }] : []),
     ...(ENABLE_SHOP_NAV

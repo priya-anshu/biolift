@@ -1,20 +1,7 @@
 "use client";
 
-import { motion } from "framer-motion";
-import {
-  Activity,
-  ArrowLeft,
-  BarChart3,
-  Bolt,
-  Calendar,
-  Clock,
-  Flame,
-  Heart,
-  Target,
-  TrendingUp,
-} from "lucide-react";
-import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { Activity, Flame, Target, TrendingUp } from "lucide-react";
 import {
   CartesianGrid,
   Line,
@@ -23,580 +10,354 @@ import {
   Tooltip,
   XAxis,
   YAxis,
-  BarChart,
-  Bar,
 } from "recharts";
+import Card from "@/components/ui/Card";
+import BodyweightChart from "@/components/charts/BodyweightChart";
+import StrengthProgressChart from "@/components/charts/StrengthProgressChart";
 
-type Workout = {
-  id: string;
-  name: string;
-  type: string | null;
-  duration_minutes: number | null;
-  calories: number | null;
-  performed_at: string;
-  status?: string;
-  completion_percentage?: number | null;
-  volume_kg?: number | null;
+type ProgressOverviewResponse = {
+  range: "week" | "month";
+  workouts: Array<{
+    id: string;
+    name: string;
+    type: string | null;
+    duration_minutes: number;
+    calories: number;
+    performed_at: string;
+    status: string;
+    completion_percentage: number;
+    volume_kg: number;
+  }>;
+  bodyWeightEntries: Array<{
+    id: string;
+    value: number;
+    metric: string;
+    recorded_at: string;
+  }>;
+  trainingStatsSnapshot: {
+    snapshot_date: string;
+    workouts_completed_7d: number;
+    weekly_volume_kg: number;
+    streak_days: number;
+    consistency_score: number;
+    acwr?: number | null;
+    overtraining_risk?: number | null;
+    optimal_volume_kg?: number | null;
+  } | null;
+  trainingStatsHistory: Array<{
+    snapshot_date: string;
+    workouts_completed_7d: number;
+    weekly_volume_kg: number;
+    consistency_score: number;
+    streak_days: number;
+    readiness_score?: number | null;
+  }>;
+  exerciseVolumeStats: Array<{
+    week_start_date: string;
+    exercise_id: string;
+    exercise_name: string | null;
+    sets_completed: number;
+    reps_completed: number;
+    weekly_volume_kg: number;
+    best_weight_kg: number;
+    best_estimated_1rm: number;
+  }>;
+  stats: {
+    workoutsCount: number;
+    caloriesBurned: number;
+    activeMinutes: number;
+    avgHeartRate: number | null;
+  };
+  error?: string;
 };
 
-type Goal = {
-  id: string;
-  title: string;
-  current_value: number | null;
-  target_value: number | null;
-  unit: string | null;
-};
-
-type ProgressEntry = {
-  value: number;
-  metric: string;
-  recorded_at: string;
-};
-
-const sectionVariants = {
-  hidden: { opacity: 0, y: 16 },
-  visible: { opacity: 1, y: 0 },
-};
-
-function getRangeStart(range: "week" | "month") {
-  const start = new Date();
-  start.setDate(start.getDate() - (range === "week" ? 7 : 30));
-  return start;
-}
-
-function formatShortDate(value: string) {
-  const date = new Date(value);
-  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+function shortDate(value: string) {
+  return new Date(value).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+  });
 }
 
 export default function ProgressPage() {
-  const [timeRange, setTimeRange] = useState<"week" | "month">("week");
-  const [workouts, setWorkouts] = useState<Workout[]>([]);
-  const [goals, setGoals] = useState<Goal[]>([]);
-  const [heartEntries, setHeartEntries] = useState<ProgressEntry[]>([]);
+  const [range, setRange] = useState<"week" | "month">("month");
   const [loading, setLoading] = useState(true);
-  const [weightValue, setWeightValue] = useState("");
-  const [weightDate, setWeightDate] = useState(() =>
-    new Date().toISOString().slice(0, 10),
-  );
-  const [logStatus, setLogStatus] = useState<string | null>(null);
-  const [logError, setLogError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [data, setData] = useState<ProgressOverviewResponse | null>(null);
+  const [weightKg, setWeightKg] = useState("");
+  const [weightSaving, setWeightSaving] = useState(false);
+  const [weightMessage, setWeightMessage] = useState<string | null>(null);
 
-  const loadData = useCallback(async () => {
+  const load = useCallback(async () => {
     setLoading(true);
-    const res = await fetch(`/api/progress/overview?range=${timeRange}`, {
-      cache: "no-store",
-    });
-    const payload = (await res.json()) as {
-      workouts?: Workout[];
-      goals?: Goal[];
-      heartEntries?: ProgressEntry[];
-      error?: string;
-    };
-    if (!res.ok) {
-      setLogError(payload.error ?? "Failed to load progress data");
+    setError(null);
+    try {
+      const response = await fetch(`/api/progress/overview?range=${range}`, {
+        cache: "no-store",
+      });
+      const payload = (await response.json()) as ProgressOverviewResponse;
+      if (!response.ok) {
+        throw new Error(payload.error ?? "Failed to load progress");
+      }
+      setData(payload);
+    } catch (loadError) {
+      setData(null);
+      setError(loadError instanceof Error ? loadError.message : "Failed to load progress");
+    } finally {
       setLoading(false);
-      return;
     }
-
-    setWorkouts(payload.workouts ?? []);
-    setGoals(payload.goals ?? []);
-    setHeartEntries(payload.heartEntries ?? []);
-    setLoading(false);
-  }, [timeRange]);
+  }, [range]);
 
   useEffect(() => {
-    loadData();
-  }, [loadData]);
+    void load();
+  }, [load]);
 
-  const completedWorkouts = workouts.filter(
-    (workout) => (workout.status ?? "completed") === "completed",
+  const historyChart = useMemo(
+    () =>
+      (data?.trainingStatsHistory ?? []).map((row) => ({
+        label: shortDate(row.snapshot_date),
+        workouts: row.workouts_completed_7d,
+        volume: Number(row.weekly_volume_kg ?? 0),
+        consistency: Number(row.consistency_score ?? 0),
+        readiness: Number(row.readiness_score ?? 0),
+      })),
+    [data?.trainingStatsHistory],
   );
-  const workoutsCount = completedWorkouts.length;
-  const caloriesBurned = completedWorkouts.reduce(
-    (sum, workout) => sum + (workout.calories ?? 0),
-    0,
-  );
-  const activeMinutes = completedWorkouts.reduce(
-    (sum, workout) => sum + (workout.duration_minutes ?? 0),
-    0,
-  );
-  const avgHeartRate = useMemo(() => {
-    if (!heartEntries.length) return null;
-    const avg =
-      heartEntries.reduce((sum, entry) => sum + Number(entry.value), 0) /
-      heartEntries.length;
-    return Math.round(avg);
-  }, [heartEntries]);
 
-  const handleWeightLog = async () => {
-    setLogStatus(null);
-    setLogError(null);
-    const value = Number(weightValue);
-    if (!value || Number.isNaN(value)) {
-      setLogError("Enter a valid body weight.");
-      return;
-    }
-    const recordedAt = new Date(`${weightDate}T08:00:00Z`).toISOString();
-    const response = await fetch("/api/progress/log-weight", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        valueKg: value,
-        recordedAt,
-      }),
-    });
-    const payload = (await response.json()) as { error?: string };
-    if (!response.ok) {
-      setLogError("Unable to save weight. Try again.");
-      return;
-    }
-    setLogStatus("Body weight saved.");
-    setWeightValue("");
-    await loadData();
-  };
+  const snapshot = data?.trainingStatsSnapshot;
 
-  const chartData = useMemo(() => {
-    const start = getRangeStart(timeRange);
-    const days = timeRange === "week" ? 7 : 30;
-    const buckets = new Map<
-      string,
-      {
-        date: string;
-        workouts: number;
-        calories: number;
-        minutes: number;
-        volume: number;
-        completed: number;
-        scheduled: number;
-        heart: number[];
+  const submitWeight = async () => {
+    setWeightSaving(true);
+    setWeightMessage(null);
+    try {
+      const valueKg = Number(weightKg);
+      if (!Number.isFinite(valueKg) || valueKg <= 0) {
+        throw new Error("Enter a valid body weight value.");
       }
-    >();
-
-    for (let i = 0; i < days; i += 1) {
-      const day = new Date(start);
-      day.setDate(start.getDate() + i);
-      const key = day.toISOString().slice(0, 10);
-      buckets.set(key, {
-        date: key,
-        workouts: 0,
-        calories: 0,
-        minutes: 0,
-        volume: 0,
-        completed: 0,
-        scheduled: 0,
-        heart: [],
+      const response = await fetch("/api/progress/log-weight", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          valueKg,
+          recordedAt: new Date().toISOString(),
+        }),
       });
+      const payload = (await response.json()) as { error?: string };
+      if (!response.ok) {
+        throw new Error(payload.error ?? "Failed to log body weight");
+      }
+      setWeightMessage("Body weight logged.");
+      setWeightKg("");
+      await load();
+    } catch (saveError) {
+      setWeightMessage(
+        saveError instanceof Error ? saveError.message : "Failed to log body weight",
+      );
+    } finally {
+      setWeightSaving(false);
     }
-
-    workouts.forEach((workout) => {
-      const key = workout.performed_at.slice(0, 10);
-      const bucket = buckets.get(key);
-      if (!bucket) return;
-      const status = workout.status ?? "completed";
-      if (status === "completed") {
-        bucket.workouts += 1;
-        bucket.completed += 1;
-      }
-      if (
-        status === "completed" ||
-        status === "planned" ||
-        status === "in_progress" ||
-        status === "missed"
-      ) {
-        bucket.scheduled += 1;
-      }
-      bucket.calories += workout.calories ?? 0;
-      bucket.minutes += workout.duration_minutes ?? 0;
-      bucket.volume += workout.volume_kg ?? 0;
-    });
-
-    heartEntries.forEach((entry) => {
-      const key = entry.recorded_at.slice(0, 10);
-      const bucket = buckets.get(key);
-      if (!bucket) return;
-      bucket.heart.push(Number(entry.value));
-    });
-
-    return Array.from(buckets.values()).map((bucket) => ({
-      date: bucket.date,
-      label: formatShortDate(bucket.date),
-      workouts: bucket.workouts,
-      calories: bucket.calories,
-      minutes: bucket.minutes,
-      volume: Number(bucket.volume.toFixed(2)),
-      consistency:
-        bucket.scheduled > 0
-          ? Number(((bucket.completed / bucket.scheduled) * 100).toFixed(1))
-          : 0,
-      heart:
-        bucket.heart.length > 0
-          ? Math.round(
-              bucket.heart.reduce((sum, value) => sum + value, 0) /
-                bucket.heart.length,
-            )
-          : 0,
-    }));
-  }, [workouts, heartEntries, timeRange]);
+  };
 
   return (
     <div className="space-y-6 text-day-text-primary dark:text-night-text-primary">
-      <motion.section
-        variants={sectionVariants}
-        initial="hidden"
-        animate="visible"
-        transition={{ duration: 0.4 }}
-        className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between"
-      >
-        <div className="flex items-center gap-4">
-          <Link
-            href="/dashboard"
-            className="flex h-10 w-10 items-center justify-center rounded-full border border-day-border text-day-text-secondary transition hover:bg-day-hover dark:border-night-border dark:text-night-text-secondary dark:hover:bg-night-hover"
-          >
-            <ArrowLeft className="h-5 w-5" />
-          </Link>
-          <div>
-            <h1 className="text-2xl font-semibold">Progress & Analytics</h1>
-            <p className="mt-1 text-sm text-day-text-secondary dark:text-night-text-secondary">
-              Track your fitness journey with detailed insights.
-            </p>
-          </div>
+      <section className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-semibold">Progress Overview</h1>
+          <p className="mt-1 text-sm text-day-text-secondary dark:text-night-text-secondary">
+            Analytics only. Data is sourced from workout logs, set execution, and cached snapshots.
+          </p>
         </div>
-        <div className="flex items-center gap-2">
-          {(["week", "month"] as const).map((range) => (
+        <div className="flex gap-2">
+          {(["week", "month"] as const).map((entry) => (
             <button
-              key={range}
-              onClick={() => setTimeRange(range)}
+              key={entry}
+              type="button"
+              onClick={() => setRange(entry)}
               className={`rounded-full px-4 py-2 text-sm font-semibold transition ${
-                timeRange === range
-                  ? "bg-day-accent-primary text-white shadow-sm dark:bg-night-accent"
+                range === entry
+                  ? "bg-day-accent-primary text-white dark:bg-night-accent"
                   : "border border-day-border text-day-text-secondary hover:bg-day-hover dark:border-night-border dark:text-night-text-secondary dark:hover:bg-night-hover"
               }`}
             >
-              {range === "week" ? "Week" : "Month"}
+              {entry === "week" ? "Week" : "Month"}
             </button>
           ))}
         </div>
-      </motion.section>
+      </section>
 
-      <motion.section
-        variants={sectionVariants}
-        initial="hidden"
-        animate="visible"
-        transition={{ duration: 0.4, delay: 0.05 }}
-        className="grid gap-4 md:grid-cols-2 lg:grid-cols-4"
-      >
-        {[
-          {
-            label: `Workouts this ${timeRange}`,
-            value: workoutsCount.toString(),
-            icon: Activity,
-            tone: "bg-sky-100 text-sky-600 dark:bg-sky-900/30 dark:text-sky-300",
-          },
-          {
-            label: "Calories Burned",
-            value: caloriesBurned.toLocaleString(),
-            icon: Flame,
-            tone: "bg-orange-100 text-orange-600 dark:bg-orange-900/30 dark:text-orange-300",
-          },
-          {
-            label: "Active Minutes",
-            value: activeMinutes.toString(),
-            icon: Clock,
-            tone: "bg-emerald-100 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-300",
-          },
-          {
-            label: "Avg Heart Rate",
-            value: avgHeartRate ? avgHeartRate.toString() : "—",
-            icon: Heart,
-            tone: "bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-300",
-          },
-        ].map((stat) => (
-          <div
-            key={stat.label}
-            className="rounded-2xl border border-day-border bg-day-card p-5 shadow-card dark:border-night-border dark:bg-night-card dark:shadow-card-dark"
+      {error ? (
+        <Card className="p-5">
+          <p className="text-sm text-red-600 dark:text-red-300">{error}</p>
+          <button
+            type="button"
+            onClick={() => void load()}
+            className="mt-3 rounded-lg bg-day-accent-primary px-4 py-2 text-sm font-semibold text-white dark:bg-night-accent"
           >
-            <div className={`flex h-10 w-10 items-center justify-center rounded-full ${stat.tone}`}>
-              <stat.icon className="h-5 w-5" />
-            </div>
-            <div className="mt-4 text-2xl font-semibold">{stat.value}</div>
-            <div className="text-sm text-day-text-secondary dark:text-night-text-secondary">
-              {stat.label}
-            </div>
-          </div>
-        ))}
-      </motion.section>
+            Retry
+          </button>
+        </Card>
+      ) : null}
 
-      <motion.section
-        variants={sectionVariants}
-        initial="hidden"
-        animate="visible"
-        transition={{ duration: 0.4, delay: 0.1 }}
-        className="grid gap-4 lg:grid-cols-2"
-      >
-        <div className="rounded-2xl border border-day-border bg-day-card p-6 shadow-card dark:border-night-border dark:bg-night-card dark:shadow-card-dark">
-          <div className="flex items-center gap-2 text-sm font-semibold">
-            <Target className="h-4 w-4 text-day-accent-primary dark:text-night-accent" />
-            Goals Progress
-          </div>
-          <div className="mt-4 space-y-4">
-            {goals.length === 0 ? (
-              <div className="text-sm text-day-text-secondary dark:text-night-text-secondary">
-                No goals yet. Add your first goal to start tracking.
-              </div>
-            ) : (
-              goals.map((goal) => {
-                const current = goal.current_value ?? 0;
-                const target = goal.target_value ?? 0;
-                const pct = target > 0 ? Math.min((current / target) * 100, 100) : 0;
-                return (
-                  <div key={goal.id} className="space-y-2">
-                    <div className="flex items-center justify-between text-sm">
-                      <span className="font-medium">{goal.title}</span>
-                      <span className="text-day-text-secondary dark:text-night-text-secondary">
-                        {current}/{target} {goal.unit ?? ""}
-                      </span>
-                    </div>
-                    <div className="h-2 w-full rounded-full bg-day-border dark:bg-night-border">
-                      <div
-                        className="h-2 rounded-full bg-linear-to-r from-day-accent-primary to-day-accent-secondary dark:from-night-accent dark:to-red-600"
-                        style={{ width: `${pct}%` }}
-                      />
-                    </div>
-                  </div>
-                );
-              })
-            )}
-          </div>
+      <Card className="p-5">
+        <div className="flex flex-wrap items-end gap-3">
+          <label className="flex-1 min-w-[180px]">
+            <span className="text-xs text-day-text-secondary dark:text-night-text-secondary">
+              Body Weight (kg)
+            </span>
+            <input
+              type="number"
+              min={1}
+              max={500}
+              step={0.1}
+              value={weightKg}
+              onChange={(event) => setWeightKg(event.target.value)}
+              className="input-field mt-1"
+              placeholder="e.g. 72.4"
+            />
+          </label>
+          <button
+            type="button"
+            disabled={weightSaving}
+            onClick={() => void submitWeight()}
+            className="rounded-lg bg-day-accent-primary px-4 py-2 text-sm font-semibold text-white disabled:opacity-60 dark:bg-night-accent"
+          >
+            {weightSaving ? "Saving..." : "Log Weight"}
+          </button>
         </div>
+        {weightMessage ? (
+          <p className="mt-2 text-xs text-day-text-secondary dark:text-night-text-secondary">
+            {weightMessage}
+          </p>
+        ) : null}
+      </Card>
 
-        <div className="rounded-2xl border border-day-border bg-day-card p-6 shadow-card dark:border-night-border dark:bg-night-card dark:shadow-card-dark">
+      <section className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+        <Card className="p-5">
           <div className="flex items-center gap-2 text-sm font-semibold">
-            <Calendar className="h-4 w-4 text-day-accent-primary dark:text-night-accent" />
-            Recent Activity
+            <Activity className="h-4 w-4 text-sky-500" />
+            Workouts (7d)
           </div>
-          <div className="mt-4 space-y-3">
+          <p className="mt-2 text-2xl font-semibold">{snapshot?.workouts_completed_7d ?? data?.stats.workoutsCount ?? 0}</p>
+        </Card>
+
+        <Card className="p-5">
+          <div className="flex items-center gap-2 text-sm font-semibold">
+            <Flame className="h-4 w-4 text-orange-500" />
+            Weekly Volume
+          </div>
+          <p className="mt-2 text-2xl font-semibold">{Math.round(snapshot?.weekly_volume_kg ?? 0)} kg</p>
+        </Card>
+
+        <Card className="p-5">
+          <div className="flex items-center gap-2 text-sm font-semibold">
+            <Target className="h-4 w-4 text-emerald-500" />
+            Consistency
+          </div>
+          <p className="mt-2 text-2xl font-semibold">{Math.round(snapshot?.consistency_score ?? 0)}%</p>
+          <p className="text-xs text-day-text-secondary dark:text-night-text-secondary">
+            Streak: {snapshot?.streak_days ?? 0} days
+          </p>
+        </Card>
+
+        <Card className="p-5">
+          <div className="flex items-center gap-2 text-sm font-semibold">
+            <TrendingUp className="h-4 w-4 text-violet-500" />
+            Load Signals
+          </div>
+          <p className="mt-2 text-sm text-day-text-secondary dark:text-night-text-secondary">
+            ACWR: {snapshot?.acwr !== null && snapshot?.acwr !== undefined ? Number(snapshot.acwr).toFixed(2) : "-"}
+          </p>
+          <p className="text-sm text-day-text-secondary dark:text-night-text-secondary">
+            Overtraining risk: {snapshot?.overtraining_risk !== null && snapshot?.overtraining_risk !== undefined ? `${Math.round(Number(snapshot.overtraining_risk))}%` : "-"}
+          </p>
+          <p className="text-sm text-day-text-secondary dark:text-night-text-secondary">
+            Optimal volume: {snapshot?.optimal_volume_kg !== null && snapshot?.optimal_volume_kg !== undefined ? `${Math.round(Number(snapshot.optimal_volume_kg))} kg` : "-"}
+          </p>
+        </Card>
+      </section>
+
+      <section className="grid gap-4 lg:grid-cols-2">
+        <BodyweightChart entries={data?.bodyWeightEntries ?? []} loading={loading} />
+        <StrengthProgressChart data={data?.exerciseVolumeStats ?? []} loading={loading} />
+      </section>
+
+      <section className="grid gap-4 lg:grid-cols-3">
+        <Card className="p-5">
+          <div className="text-sm font-semibold">Weekly Training Volume</div>
+          <div className="mt-4 h-64">
             {loading ? (
-              <div className="text-sm text-day-text-secondary dark:text-night-text-secondary">
-                Loading activity…
-              </div>
-            ) : workouts.length === 0 ? (
-              <div className="text-sm text-day-text-secondary dark:text-night-text-secondary">
-                No workouts logged yet.
-              </div>
+              <div className="skeleton h-full rounded-lg" />
+            ) : historyChart.length === 0 ? (
+              <p className="text-sm text-day-text-secondary dark:text-night-text-secondary">No training history yet.</p>
             ) : (
-              workouts.slice(0, 4).map((workout) => (
-                <div
-                  key={workout.id}
-                  className="flex items-center justify-between rounded-xl border border-day-border px-3 py-2 text-sm text-day-text-secondary transition hover:bg-day-hover dark:border-night-border dark:text-night-text-secondary dark:hover:bg-night-hover"
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-linear-to-br from-day-accent-primary to-day-accent-secondary text-white dark:from-night-accent dark:to-red-600">
-                      <Activity className="h-4 w-4" />
-                    </div>
-                    <div>
-                      <div className="text-sm font-medium text-day-text-primary dark:text-night-text-primary">
-                        {workout.name}
-                      </div>
-                      <div className="text-xs text-day-text-secondary dark:text-night-text-secondary">
-                        {(workout.duration_minutes ?? 0) > 0
-                          ? `${workout.duration_minutes} min`
-                          : "0 min"}{" "}
-                        •{" "}
-                        {(workout.calories ?? 0) > 0
-                          ? `${workout.calories} cal`
-                          : "0 cal"}
-                      </div>
-                    </div>
-                  </div>
-                  <span className="rounded-full bg-day-hover px-2 py-0.5 text-[11px] font-semibold text-day-text-secondary dark:bg-night-hover dark:text-night-text-secondary">
-                    {workout.type ?? "Workout"}
-                  </span>
-                </div>
-              ))
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={historyChart}>
+                  <CartesianGrid strokeDasharray="3 3" strokeOpacity={0.2} />
+                  <XAxis dataKey="label" tick={{ fontSize: 11 }} />
+                  <YAxis tick={{ fontSize: 11 }} />
+                  <Tooltip />
+                  <Line type="monotone" dataKey="volume" stroke="#10b981" strokeWidth={3} dot={false} />
+                </LineChart>
+              </ResponsiveContainer>
             )}
           </div>
-        </div>
-      </motion.section>
+        </Card>
 
-      <motion.section
-        variants={sectionVariants}
-        initial="hidden"
-        animate="visible"
-        transition={{ duration: 0.4, delay: 0.15 }}
-        className="grid gap-4 lg:grid-cols-2"
-      >
-        <div className="rounded-2xl border border-day-border bg-day-card p-6 shadow-card dark:border-night-border dark:bg-night-card dark:shadow-card-dark">
-          <div className="flex items-center gap-2 text-sm font-semibold">
-            <Target className="h-4 w-4 text-day-accent-primary dark:text-night-accent" />
-            Bodyweight Tracking
-          </div>
-          <div className="mt-4 space-y-4">
-            <div>
-              <div className="text-sm font-semibold">Daily Body Weight</div>
-              <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center">
-                <input
-                  type="number"
-                  value={weightValue}
-                  onChange={(event) => setWeightValue(event.target.value)}
-                  placeholder="e.g. 72.5"
-                  className="w-full rounded-lg border border-day-border bg-day-card px-3 py-2 text-sm text-day-text-primary focus:border-transparent focus:outline-none focus:ring-2 focus:ring-day-accent-primary dark:border-night-border dark:bg-night-card dark:text-night-text-primary dark:focus:ring-night-accent"
-                />
-                <input
-                  type="date"
-                  value={weightDate}
-                  onChange={(event) => setWeightDate(event.target.value)}
-                  className="w-full rounded-lg border border-day-border bg-day-card px-3 py-2 text-sm text-day-text-primary focus:border-transparent focus:outline-none focus:ring-2 focus:ring-day-accent-primary dark:border-night-border dark:bg-night-card dark:text-night-text-primary dark:focus:ring-night-accent"
-                />
-                <button
-                  onClick={handleWeightLog}
-                  className="rounded-lg bg-day-accent-primary px-4 py-2 text-sm font-semibold text-white dark:bg-night-accent"
-                >
-                  Save
-                </button>
-              </div>
-            </div>
-            <div className="rounded-xl border border-day-border p-4 text-sm text-day-text-secondary dark:border-night-border dark:text-night-text-secondary">
-              Record your weight daily to unlock fair ranking eligibility.
-            </div>
-            {logStatus ? (
-              <div className="text-sm text-emerald-600 dark:text-emerald-300">{logStatus}</div>
-            ) : null}
-            {logError ? <div className="text-sm text-rose-500">{logError}</div> : null}
-          </div>
-        </div>
-
-        <div className="rounded-2xl border border-day-border bg-day-card p-6 shadow-card dark:border-night-border dark:bg-night-card dark:shadow-card-dark">
-          <div className="flex items-center gap-2 text-sm font-semibold">
-            <Activity className="h-4 w-4 text-day-accent-primary dark:text-night-accent" />
-            Analytics Source
-          </div>
-          <div className="mt-4 space-y-3 text-sm text-day-text-secondary dark:text-night-text-secondary">
-            <p>
-              Workout analytics on this page are generated automatically from completed
-              workout sessions.
-            </p>
-            <p>
-              Source tables: <code>workout_logs</code>, <code>workout_log_exercises</code>,{" "}
-              <code>workout_log_sets</code>, and <code>personal_records</code>.
-            </p>
-            <Link
-              href="/dashboard/workout-session"
-              className="inline-flex rounded-lg bg-day-accent-primary px-4 py-2 text-sm font-semibold text-white dark:bg-night-accent"
-            >
-              Start Workout Session
-            </Link>
-          </div>
-        </div>
-      </motion.section>
-
-      <motion.section
-        variants={sectionVariants}
-        initial="hidden"
-        animate="visible"
-        transition={{ duration: 0.4, delay: 0.2 }}
-        className="rounded-2xl border border-day-border bg-day-card p-6 shadow-card dark:border-night-border dark:bg-night-card dark:shadow-card-dark"
-      >
-        <div className="flex items-center gap-2 text-sm font-semibold">
-          <TrendingUp className="h-4 w-4 text-day-accent-primary dark:text-night-accent" />
-          Progress Trends
-        </div>
-        <div className="mt-4 grid gap-6 lg:grid-cols-2">
-          <div className="min-h-[260px] rounded-xl border border-day-border bg-day-hover p-4 dark:border-night-border dark:bg-night-hover">
-            <div className="flex items-center gap-2 text-sm font-semibold text-day-text-primary dark:text-night-text-primary">
-              <Activity className="h-4 w-4 text-day-accent-primary dark:text-night-accent" />
-              Workouts per day
-            </div>
-            <div className="mt-3 h-56 min-h-[200px]">
+        <Card className="p-5">
+          <div className="text-sm font-semibold">Consistency Score</div>
+          <div className="mt-4 h-64">
+            {loading ? (
+              <div className="skeleton h-full rounded-lg" />
+            ) : historyChart.length === 0 ? (
+              <p className="text-sm text-day-text-secondary dark:text-night-text-secondary">No consistency history yet.</p>
+            ) : (
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={chartData}>
+                <LineChart data={historyChart}>
                   <CartesianGrid strokeDasharray="3 3" strokeOpacity={0.2} />
                   <XAxis dataKey="label" tick={{ fontSize: 11 }} />
-                  <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
+                  <YAxis tick={{ fontSize: 11 }} domain={[0, 100]} />
                   <Tooltip />
-                  <Bar
-                    dataKey="workouts"
-                    fill="var(--color-day-accent-primary)"
-                    radius={[6, 6, 0, 0]}
-                  />
-                </BarChart>
+                  <Line type="monotone" dataKey="consistency" stroke="#8b5cf6" strokeWidth={3} dot={false} />
+                </LineChart>
               </ResponsiveContainer>
-            </div>
+            )}
           </div>
+        </Card>
 
-          <div className="min-h-[260px] rounded-xl border border-day-border bg-day-hover p-4 dark:border-night-border dark:bg-night-hover">
-            <div className="flex items-center gap-2 text-sm font-semibold text-day-text-primary dark:text-night-text-primary">
-              <Flame className="h-4 w-4 text-day-accent-secondary dark:text-night-accent" />
-              Volume progression (kg)
-            </div>
-            <div className="mt-3 h-56 min-h-[200px]">
+        <Card className="p-5">
+          <div className="text-sm font-semibold">Recovery Readiness Trend</div>
+          <div className="mt-4 h-64">
+            {loading ? (
+              <div className="skeleton h-full rounded-lg" />
+            ) : historyChart.length === 0 ? (
+              <p className="text-sm text-day-text-secondary dark:text-night-text-secondary">
+                No readiness trend yet.
+              </p>
+            ) : (
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={chartData}>
+                <LineChart data={historyChart}>
                   <CartesianGrid strokeDasharray="3 3" strokeOpacity={0.2} />
                   <XAxis dataKey="label" tick={{ fontSize: 11 }} />
-                  <YAxis tick={{ fontSize: 11 }} />
+                  <YAxis tick={{ fontSize: 11 }} domain={[0, 100]} />
                   <Tooltip />
                   <Line
                     type="monotone"
-                    dataKey="volume"
-                    stroke="var(--color-day-accent-secondary)"
+                    dataKey="readiness"
+                    stroke="#f97316"
                     strokeWidth={3}
                     dot={false}
                   />
                 </LineChart>
               </ResponsiveContainer>
-            </div>
+            )}
           </div>
+        </Card>
+      </section>
 
-          <div className="min-h-[260px] rounded-xl border border-day-border bg-day-hover p-4 dark:border-night-border dark:bg-night-hover">
-            <div className="flex items-center gap-2 text-sm font-semibold text-day-text-primary dark:text-night-text-primary">
-              <Bolt className="h-4 w-4 text-amber-500" />
-              Training consistency (%)
-            </div>
-            <div className="mt-3 h-56 min-h-[200px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={chartData}>
-                  <CartesianGrid strokeDasharray="3 3" strokeOpacity={0.2} />
-                  <XAxis dataKey="label" tick={{ fontSize: 11 }} />
-                  <YAxis tick={{ fontSize: 11 }} />
-                  <Tooltip />
-                  <Line
-                    type="monotone"
-                    dataKey="consistency"
-                    stroke="#10b981"
-                    strokeWidth={3}
-                    dot={false}
-                  />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-
-          <div className="min-h-[260px] rounded-xl border border-day-border bg-day-hover p-4 dark:border-night-border dark:bg-night-hover">
-            <div className="flex items-center gap-2 text-sm font-semibold text-day-text-primary dark:text-night-text-primary">
-              <Heart className="h-4 w-4 text-red-500" />
-              Avg heart rate
-            </div>
-            <div className="mt-3 h-56 min-h-[200px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={chartData}>
-                  <CartesianGrid strokeDasharray="3 3" strokeOpacity={0.2} />
-                  <XAxis dataKey="label" tick={{ fontSize: 11 }} />
-                  <YAxis tick={{ fontSize: 11 }} />
-                  <Tooltip />
-                  <Line
-                    type="monotone"
-                    dataKey="heart"
-                    stroke="#ef4444"
-                    strokeWidth={3}
-                    dot={false}
-                  />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-        </div>
-      </motion.section>
+      <Card className="p-5">
+        <p className="text-xs text-day-text-secondary dark:text-night-text-secondary">
+          Analytics pipeline: workout_logs to workout_log_exercises to workout_log_sets, with snapshots from user_training_stats and exercise_volume_stats.
+        </p>
+      </Card>
     </div>
   );
 }
