@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
@@ -179,9 +180,11 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
               >
                 <div className="flex h-8 w-8 items-center justify-center overflow-hidden rounded-full bg-day-hover text-xs font-semibold text-day-text-secondary dark:bg-night-hover dark:text-night-text-secondary">
                   {avatarUrl ? (
-                    <img
+                    <Image
                       src={avatarUrl}
                       alt={displayName}
+                      width={32}
+                      height={32}
                       className="h-8 w-8 rounded-full object-cover"
                     />
                   ) : (

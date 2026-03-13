@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Clock,
@@ -236,12 +237,14 @@ export default function ShopPage() {
               key={product.id}
               className="rounded-2xl border border-day-border bg-day-card p-4 shadow-card transition hover:-translate-y-1 hover:shadow-lg dark:border-night-border dark:bg-night-card dark:shadow-card-dark"
             >
-              <div className="aspect-square overflow-hidden rounded-xl bg-day-hover dark:bg-night-hover">
+              <div className="relative aspect-square overflow-hidden rounded-xl bg-day-hover dark:bg-night-hover">
                 {product.image ? (
-                  <img
+                  <Image
                     src={product.image}
                     alt={product.name}
-                    className="h-full w-full object-cover"
+                    fill
+                    sizes="(min-width: 1024px) 20vw, (min-width: 640px) 33vw, 100vw"
+                    className="object-cover"
                   />
                 ) : (
                   <div className="flex h-full items-center justify-center text-xs text-day-text-secondary dark:text-night-text-secondary">
@@ -371,8 +374,14 @@ export default function ShopPage() {
                       className="rounded-xl border border-day-border p-3 text-sm dark:border-night-border"
                     >
                       <div className="flex items-center gap-3">
-                        <div className="h-14 w-14 overflow-hidden rounded-lg bg-day-hover dark:bg-night-hover">
-                          <img src={item.image} alt={item.name} className="h-full w-full object-cover" />
+                        <div className="relative h-14 w-14 overflow-hidden rounded-lg bg-day-hover dark:bg-night-hover">
+                          <Image
+                            src={item.image}
+                            alt={item.name}
+                            fill
+                            sizes="56px"
+                            className="object-cover"
+                          />
                         </div>
                         <div className="flex-1">
                           <div className="font-semibold">{item.name}</div>

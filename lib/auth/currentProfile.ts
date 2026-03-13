@@ -28,7 +28,7 @@ export async function resolveCurrentProfile(
     throw new Error("Authenticated user email missing");
   }
 
-  const byAuthUser = await adminClient
+  const byAuthUser = await serverClient
     .from("profiles")
     .select("id,email,role")
     .eq("auth_user_id", authUserId)
@@ -59,15 +59,18 @@ export async function resolveCurrentProfile(
     };
   }
 
-  await adminClient.from("users").upsert(
+  const userTouch = await serverClient.from("users").upsert(
     {
       id: profile.id,
       updated_at: new Date().toISOString(),
     },
     { onConflict: "id" },
   );
+  if (userTouch.error) {
+    throw new Error(userTouch.error.message);
+  }
 
-  const userSettingsRes = await adminClient
+  const userSettingsRes = await serverClient
     .from("users")
     .select("preferred_language")
     .eq("id", profile.id)

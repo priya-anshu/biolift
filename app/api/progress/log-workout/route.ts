@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import { apiErrorResponse } from "@/lib/server/api";
 import { getWorkoutPlannerApiContext } from "@/lib/workout-planner/apiContext";
 import { logManualWorkoutExecution } from "@/lib/workout-planner/service";
-import { enqueueAiJob } from "@/lib/workout-planner/workerQueue";
+import { scheduleAiJob } from "@/lib/workout-planner/workerQueue";
 
 type Payload = {
   name?: unknown;
@@ -53,31 +54,29 @@ export async function POST(request: NextRequest) {
       },
     );
 
-    void enqueueAiJob(api.adminClient, {
+    const immediatePayload = {
+      workoutLogId: String(workout.id),
+      workoutDate: String(workout.workout_date),
+      planId:
+        typeof workout.plan_id === "string" && workout.plan_id.length > 0
+          ? workout.plan_id
+          : undefined,
+      lookbackDays: 42,
+    };
+
+    await scheduleAiJob(api.adminClient, {
+      scope: "progress.log-workout.enqueue",
+      swallowErrors: true,
       userId: api.current.profileId,
       jobType: "manual_workout_logged",
-      payload: {
-        workoutLogId: String(workout.id),
-        workoutDate: String(workout.workout_date),
-        planId:
-          typeof workout.plan_id === "string" && workout.plan_id.length > 0
-            ? workout.plan_id
-            : undefined,
-        lookbackDays: 42,
-      },
+      payload: immediatePayload,
       dedupeKey: `manual_workout_logged:${api.current.profileId}:${workout.id}`,
-    }).catch(() => {});
+    });
 
     return NextResponse.json({ workout });
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Failed to log workout";
-    const status =
-      message === "Unauthorized"
-        ? 401
-        : message === "Rate limit exceeded"
-          ? 429
-          : 400;
-    return NextResponse.json({ error: message }, { status });
+    return apiErrorResponse(error, "Failed to log workout", {
+      scope: "progress.log-workout",
+    });
   }
 }

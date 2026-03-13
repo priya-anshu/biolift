@@ -1,9 +1,10 @@
 "use client";
 
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useState, useSyncExternalStore } from "react";
 
 type ThemeContextValue = {
   isDarkMode: boolean;
+  isHydrated: boolean;
   toggleTheme: () => void;
   theme: "dark" | "light";
 };
@@ -21,8 +22,16 @@ export function useTheme() {
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [isDarkMode, setIsDarkMode] = useState(() => {
     if (typeof window === "undefined") return false;
-    return window.localStorage.getItem("biolift-theme") === "dark";
+    const stored = window.localStorage.getItem("biolift-theme");
+    if (stored === "dark") return true;
+    if (stored === "light") return false;
+    return window.matchMedia("(prefers-color-scheme: dark)").matches;
   });
+  const isHydrated = useSyncExternalStore(
+    () => () => {},
+    () => true,
+    () => false,
+  );
 
   useEffect(() => {
     window.localStorage.setItem("biolift-theme", isDarkMode ? "dark" : "light");
@@ -33,6 +42,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     <ThemeContext.Provider
       value={{
         isDarkMode,
+        isHydrated,
         toggleTheme: () => setIsDarkMode((prev) => !prev),
         theme: isDarkMode ? "dark" : "light",
       }}

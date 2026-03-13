@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { motion } from "framer-motion";
 import Link from "next/link";
 import {
@@ -275,9 +276,11 @@ export default function AdminDashboardPage() {
                   <div className="flex min-w-0 items-center gap-3">
                     <div className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-full bg-day-card text-xs font-semibold dark:bg-night-card">
                       {item.avatarUrl ? (
-                        <img
+                        <Image
                           src={item.avatarUrl}
                           alt={getName(item.name, item.email)}
+                          width={36}
+                          height={36}
                           className="h-9 w-9 rounded-full object-cover"
                         />
                       ) : (

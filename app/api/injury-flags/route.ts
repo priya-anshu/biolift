@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { apiErrorResponse } from "@/lib/server/api";
 import { getWorkoutPlannerApiContext } from "@/lib/workout-planner/apiContext";
 
 type InjuryPayload = {
@@ -10,14 +11,9 @@ type InjuryPayload = {
 };
 
 function toErrorResponse(error: unknown, fallback: string) {
-  const message = error instanceof Error ? error.message : fallback;
-  const status =
-    message === "Unauthorized"
-      ? 401
-      : message === "Rate limit exceeded"
-        ? 429
-        : 400;
-  return NextResponse.json({ error: message }, { status });
+  return apiErrorResponse(error, fallback, {
+    scope: "injury-flags",
+  });
 }
 
 function toInt(value: unknown, fallback: number) {

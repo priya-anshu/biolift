@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { apiErrorResponse } from "@/lib/server/api";
 import {
   AdminAuthError,
   dedupeProfilesByEmail,
@@ -19,10 +20,11 @@ export async function GET() {
     const users = dedupeProfilesByEmail(identities);
     return NextResponse.json({ users });
   } catch (error) {
-    if (error instanceof AdminAuthError) {
-      return NextResponse.json({ error: error.message }, { status: error.status });
-    }
-    return NextResponse.json({ error: "Failed to load users." }, { status: 500 });
+    return apiErrorResponse(
+      error instanceof AdminAuthError ? new Error(error.message) : error,
+      "Failed to load users.",
+      { scope: "admin.users.get" },
+    );
   }
 }
 
@@ -41,7 +43,7 @@ export async function PATCH(request: NextRequest) {
       !["user", "admin"].includes(body.role)
     ) {
       return NextResponse.json(
-        { error: "Invalid payload. Expected profileIds and role." },
+        { success: false, error: "Invalid payload. Expected profileIds and role." },
         { status: 400 },
       );
     }
@@ -53,16 +55,17 @@ export async function PATCH(request: NextRequest) {
 
     if (error) {
       return NextResponse.json(
-        { error: `Failed to update role: ${error.message}` },
+        { success: false, error: `Failed to update role: ${error.message}` },
         { status: 400 },
       );
     }
 
     return NextResponse.json({ success: true });
   } catch (error) {
-    if (error instanceof AdminAuthError) {
-      return NextResponse.json({ error: error.message }, { status: error.status });
-    }
-    return NextResponse.json({ error: "Failed to update user role." }, { status: 500 });
+    return apiErrorResponse(
+      error instanceof AdminAuthError ? new Error(error.message) : error,
+      "Failed to update user role.",
+      { scope: "admin.users.patch" },
+    );
   }
 }

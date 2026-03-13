@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { apiErrorResponse } from "@/lib/server/api";
+import { getWorkerSecret } from "@/lib/env";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { processAiJobQueue } from "@/lib/workout-planner/workerQueue";
 
@@ -15,10 +17,7 @@ function extractSecret(request: NextRequest) {
 }
 
 function ensureAuthorized(request: NextRequest) {
-  const expectedSecret = process.env.AI_WORKER_SECRET ?? process.env.CRON_SECRET;
-  if (!expectedSecret) {
-    throw new Error("AI_WORKER_SECRET or CRON_SECRET is required");
-  }
+  const expectedSecret = getWorkerSecret();
   if (extractSecret(request) !== expectedSecret) {
     throw new Error("Unauthorized");
   }
@@ -45,10 +44,9 @@ export async function GET(request: NextRequest) {
   try {
     return await handleProcess(request);
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Failed to process AI queue";
-    const status = message === "Unauthorized" ? 401 : 400;
-    return NextResponse.json({ error: message }, { status });
+    return apiErrorResponse(error, "Failed to process AI queue", {
+      scope: "internal.ai-worker.process.get",
+    });
   }
 }
 
@@ -56,9 +54,8 @@ export async function POST(request: NextRequest) {
   try {
     return await handleProcess(request);
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Failed to process AI queue";
-    const status = message === "Unauthorized" ? 401 : 400;
-    return NextResponse.json({ error: message }, { status });
+    return apiErrorResponse(error, "Failed to process AI queue", {
+      scope: "internal.ai-worker.process.post",
+    });
   }
 }

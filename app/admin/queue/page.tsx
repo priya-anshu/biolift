@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { motion } from "framer-motion";
 import {
   CheckCircle2,
@@ -256,9 +257,11 @@ export default function AdminQueuePage() {
                     <div className="flex items-start gap-3">
                       <div className="flex h-10 w-10 items-center justify-center rounded-full bg-day-hover text-sm font-semibold text-day-text-secondary dark:bg-night-hover dark:text-night-text-secondary">
                         {item.requester.avatarUrl ? (
-                          <img
+                          <Image
                             src={item.requester.avatarUrl}
                             alt={displayName}
+                            width={40}
+                            height={40}
                             className="h-10 w-10 rounded-full object-cover"
                           />
                         ) : (

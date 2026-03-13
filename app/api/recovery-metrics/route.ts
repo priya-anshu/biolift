@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
+import { apiErrorResponse } from "@/lib/server/api";
 import { getWorkoutPlannerApiContext } from "@/lib/workout-planner/apiContext";
-import { enqueueAiJob } from "@/lib/workout-planner/workerQueue";
+import { scheduleAiJob } from "@/lib/workout-planner/workerQueue";
 
 type RecoveryPayload = {
   metricDate?: unknown;
@@ -76,15 +77,9 @@ export async function GET(request: NextRequest) {
     }
     return NextResponse.json({ items: rowsRes.data ?? [] });
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Failed to load recovery metrics";
-    const status =
-      message === "Unauthorized"
-        ? 401
-        : message === "Rate limit exceeded"
-          ? 429
-          : 400;
-    return NextResponse.json({ error: message }, { status });
+    return apiErrorResponse(error, "Failed to load recovery metrics", {
+      scope: "recovery-metrics.get",
+    });
   }
 }
 
@@ -133,26 +128,23 @@ export async function POST(request: NextRequest) {
       throw new Error(upsertRes.error.message);
     }
 
-    void enqueueAiJob(api.adminClient, {
+    const immediatePayload = {
+      workoutDate: metricDate,
+      lookbackDays: 42,
+    };
+    await scheduleAiJob(api.adminClient, {
+      scope: "recovery-metrics.post.enqueue",
+      swallowErrors: true,
       userId: api.current.profileId,
       jobType: "recovery_updated",
-      payload: {
-        workoutDate: metricDate,
-        lookbackDays: 42,
-      },
+      payload: immediatePayload,
       dedupeKey: `recovery_updated:${api.current.profileId}:${metricDate}`,
-    }).catch(() => {});
+    });
 
     return NextResponse.json({ item: upsertRes.data });
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Failed to update recovery metrics";
-    const status =
-      message === "Unauthorized"
-        ? 401
-        : message === "Rate limit exceeded"
-          ? 429
-          : 400;
-    return NextResponse.json({ error: message }, { status });
+    return apiErrorResponse(error, "Failed to update recovery metrics", {
+      scope: "recovery-metrics.post",
+    });
   }
 }

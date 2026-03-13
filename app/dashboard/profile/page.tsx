@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   Award,
@@ -392,9 +393,11 @@ export default function ProfilePage() {
           <div className="relative">
             <div className="flex h-24 w-24 items-center justify-center overflow-hidden rounded-full bg-day-hover text-2xl font-semibold text-day-text-secondary dark:bg-night-hover dark:text-night-text-secondary">
               {profile?.avatar_url ? (
-                <img
+                <Image
                   src={profile.avatar_url}
                   alt={profile.name ?? "Avatar"}
+                  width={96}
+                  height={96}
                   className="h-full w-full object-cover"
                 />
               ) : (

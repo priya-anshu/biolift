@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { apiErrorResponse } from "@/lib/server/api";
+import { getWorkerSecret } from "@/lib/env";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { processAiJobQueue } from "@/lib/workout-planner/workerQueue";
 
@@ -9,10 +11,7 @@ function extractBearerToken(request: NextRequest) {
 }
 
 function ensureAuthorized(request: NextRequest) {
-  const secret = process.env.CRON_SECRET ?? process.env.AI_WORKER_SECRET;
-  if (!secret) {
-    throw new Error("CRON_SECRET or AI_WORKER_SECRET is required");
-  }
+  const secret = getWorkerSecret();
   if (extractBearerToken(request) !== secret) {
     throw new Error("Unauthorized");
   }
@@ -34,9 +33,8 @@ export async function GET(request: NextRequest) {
     });
     return NextResponse.json({ summary });
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Failed to run AI worker cron";
-    const status = message === "Unauthorized" ? 401 : 400;
-    return NextResponse.json({ error: message }, { status });
+    return apiErrorResponse(error, "Failed to run AI worker cron", {
+      scope: "cron.ai-worker",
+    });
   }
 }

@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { motion } from "framer-motion";
 import {
   Crown,
@@ -29,7 +30,6 @@ type LeaderboardRow = {
   updated_at: string | null;
   profiles?: {
     name: string | null;
-    email: string | null;
     avatar_url: string | null;
   } | null;
 };
@@ -38,12 +38,10 @@ type RawLeaderboardRow = Omit<LeaderboardRow, "profiles"> & {
   profiles?:
     | {
         name: string | null;
-        email: string | null;
         avatar_url: string | null;
       }[]
     | {
         name: string | null;
-        email: string | null;
         avatar_url: string | null;
       }
     | null;
@@ -177,8 +175,7 @@ export default function RankingPage() {
 
     return sorted.filter((entry) => {
       const name = entry.profiles?.name ?? "";
-      const email = entry.profiles?.email ?? "";
-      return name.toLowerCase().includes(term) || email.toLowerCase().includes(term);
+      return name.toLowerCase().includes(term);
     });
   }, [leaderboard, search, activeMetric]);
 
@@ -293,7 +290,7 @@ export default function RankingPage() {
         {topThree.map((entry, index) => {
           const tierMeta = getTierMeta(entry.tier);
           const TierIcon = tierMeta.icon;
-          const displayName = entry.profiles?.name ?? entry.profiles?.email ?? "Athlete";
+          const displayName = entry.profiles?.name ?? "Athlete";
           const highlight =
             index === 0
               ? "from-amber-400/20 to-amber-500/10"
@@ -328,9 +325,11 @@ export default function RankingPage() {
               <div className="flex items-center gap-3">
                 <div className="flex h-12 w-12 items-center justify-center rounded-full bg-day-hover text-sm font-semibold text-day-text-secondary dark:bg-night-hover dark:text-night-text-secondary">
                   {entry.profiles?.avatar_url ? (
-                    <img
+                    <Image
                       src={entry.profiles.avatar_url}
                       alt={displayName}
+                      width={48}
+                      height={48}
                       className="h-full w-full rounded-full object-cover"
                     />
                   ) : (
@@ -383,7 +382,7 @@ export default function RankingPage() {
               filtered.map((entry, index) => {
                 const tierMeta = getTierMeta(entry.tier);
                 const TierIcon = tierMeta.icon;
-                const displayName = entry.profiles?.name ?? entry.profiles?.email ?? "Athlete";
+                const displayName = entry.profiles?.name ?? "Athlete";
                 const isMe = !!profileId && entry.user_id === profileId;
                 return (
                   <div
@@ -400,9 +399,11 @@ export default function RankingPage() {
                     <div className="flex flex-1 items-center gap-3">
                       <div className="flex h-10 w-10 items-center justify-center rounded-full bg-day-hover text-sm font-semibold text-day-text-secondary dark:bg-night-hover dark:text-night-text-secondary">
                         {entry.profiles?.avatar_url ? (
-                          <img
+                          <Image
                             src={entry.profiles.avatar_url}
                             alt={displayName}
+                            width={40}
+                            height={40}
                             className="h-full w-full rounded-full object-cover"
                           />
                         ) : (
@@ -419,7 +420,7 @@ export default function RankingPage() {
                           ) : null}
                         </div>
                         <div className="text-xs text-day-text-secondary dark:text-night-text-secondary">
-                          {entry.profiles?.email ?? "Member"}
+                          Ranked athlete
                         </div>
                       </div>
                     </div>

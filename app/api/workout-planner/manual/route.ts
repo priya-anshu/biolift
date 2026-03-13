@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
+import { apiErrorResponse } from "@/lib/server/api";
 import { logger } from "@/lib/server/logger";
 import { getWorkoutPlannerApiContext } from "@/lib/workout-planner/apiContext";
 import { createManualPlan } from "@/lib/workout-planner/service";
 import { validateManualPlanRequest } from "@/lib/workout-planner/validation";
-import { enqueueAiJob } from "@/lib/workout-planner/workerQueue";
+import { scheduleAiJob } from "@/lib/workout-planner/workerQueue";
 
 function todayUtcDateKey() {
   return new Date().toISOString().slice(0, 10);
@@ -34,45 +35,24 @@ export async function POST(request: NextRequest) {
     });
 
     const workoutDate = todayUtcDateKey();
-    void enqueueAiJob(context.adminClient, {
+    const immediatePayload = {
+      workoutDate,
+      planId: String(result.plan.id),
+      lookbackDays: 42,
+    };
+    await scheduleAiJob(context.adminClient, {
+      scope: "workout-planner.manual.enqueue",
+      swallowErrors: true,
       userId: context.current.profileId,
       jobType: "plan_updated",
-      payload: {
-        workoutDate,
-        planId: String(result.plan.id),
-        lookbackDays: 42,
-      },
+      payload: immediatePayload,
       dedupeKey: `plan_updated:${context.current.profileId}:${result.plan.id}:${workoutDate}`,
-    }).catch((cacheError) => {
-      logger.warn({
-        scope: "workout-planner.manual.enqueue",
-        message: "AI worker job enqueue failed",
-        meta: {
-          profileId: context.current.profileId,
-          planId: result.plan.id,
-          error:
-            cacheError instanceof Error
-              ? cacheError.message
-              : "Unknown cache prime error",
-        },
-      });
     });
 
     return NextResponse.json(result);
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Failed to create manual plan";
-    const status =
-      message === "Unauthorized"
-        ? 401
-        : message === "Rate limit exceeded"
-          ? 429
-          : 400;
-    logger.warn({
+    return apiErrorResponse(error, "Failed to create manual plan", {
       scope: "workout-planner.manual",
-      message: "Request failed",
-      meta: { error: message },
     });
-    return NextResponse.json({ error: message }, { status });
   }
 }

@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { apiErrorResponse } from "@/lib/server/api";
+import { logger } from "@/lib/server/logger";
 import { getWorkoutPlannerApiContext } from "@/lib/workout-planner/apiContext";
 import {
   getWorkoutRecommendations,
@@ -6,10 +8,7 @@ import {
   upsertCalendarStatus,
   upsertWorkoutLog,
 } from "@/lib/workout-planner/service";
-import {
-  checkRecommendationCacheTTL,
-  enqueueAiJob,
-} from "@/lib/workout-planner/workerQueue";
+import { scheduleAiJob } from "@/lib/workout-planner/workerQueue";
 import type {
   ExerciseRecommendation,
   TrainingIntelligenceResult,
@@ -71,14 +70,9 @@ function assertIsoDate(value: string, fieldName: string) {
 }
 
 function toErrorResponse(error: unknown, fallback: string) {
-  const message = error instanceof Error ? error.message : fallback;
-  const status =
-    message === "Unauthorized"
-      ? 401
-      : message === "Rate limit exceeded"
-        ? 429
-        : 400;
-  return NextResponse.json({ error: message }, { status });
+  return apiErrorResponse(error, fallback, {
+    scope: "workout.session",
+  });
 }
 
 function parseNumber(value: unknown, fallback = 0) {
@@ -265,6 +259,15 @@ async function buildSessionRows(
             recommendations: input.recommendations.map(parseRecommendation),
           } as TrainingIntelligenceResult,
           cacheState: "exact" as const,
+          cacheTtl: {
+            exists: false,
+            isStale: false,
+            updatedAt: null,
+            planId: input.planId ?? "",
+            workoutDate: input.workoutDate,
+            dayIndex: input.dayIndex ?? 1,
+            lookbackDays: input.lookbackDays ?? 42,
+          },
         }
       : await getWorkoutRecommendations(
           { client: context.client, profileId: context.current.profileId },
@@ -276,17 +279,12 @@ async function buildSessionRows(
           },
         );
 
-  const ttl = await checkRecommendationCacheTTL(context.client, {
-    userId: context.current.profileId,
-    workoutDate: input.workoutDate,
-    planId: input.planId,
-    dayIndex: input.dayIndex,
-    lookbackDays: input.lookbackDays,
-  });
   const shouldEnqueue =
-    recommendationRead.cacheState !== "exact" || (ttl.exists && ttl.isStale);
+    recommendationRead.cacheState !== "exact" || recommendationRead.cacheTtl.isStale;
   if (shouldEnqueue) {
-    void enqueueAiJob(context.adminClient, {
+    await scheduleAiJob(context.adminClient, {
+      scope: "workout.session.refresh",
+      swallowErrors: true,
       userId: context.current.profileId,
       jobType: "recommendation_refresh",
       payload: {
@@ -301,7 +299,7 @@ async function buildSessionRows(
         dayIndex: input.dayIndex,
         lookbackDays: input.lookbackDays,
       }),
-    }).catch(() => {});
+    });
   }
 
   const rawRecommendations = recommendationRead.recommendations.recommendations;
@@ -333,7 +331,7 @@ async function buildSessionRows(
   );
   const planRowsRes = await context.client
     .from("workout_plan_exercises")
-    .select("id,exercise_name,muscle_group,exercise_order,rpe")
+    .select("id,exercise_name,muscle_group,exercise_order,rpe,superset_group")
     .in("id", planExerciseIds);
   if (planRowsRes.error) throw new Error(planRowsRes.error.message);
 
@@ -345,6 +343,10 @@ async function buildSessionRows(
         muscle_group: String(row.muscle_group ?? ""),
         exercise_order: Math.max(1, Math.floor(parseNumber(row.exercise_order, 1))),
         rpe: row.rpe === null || row.rpe === undefined ? null : parseNumber(row.rpe, 0),
+        superset_group:
+          typeof row.superset_group === "string" && row.superset_group.trim().length > 0
+            ? row.superset_group.trim().toUpperCase()
+            : null,
       },
     ]),
   );
@@ -413,7 +415,12 @@ async function buildSessionRows(
       .select(selectColumns)
       .order("exercise_order", { ascending: true });
 
-    if (syncRes.error?.code === "23505") {
+    const isUniqueViolation =
+      syncRes.error?.code === "23505" ||
+      syncRes.error?.message?.includes(
+        "workout_log_exercises_workout_log_id_exercise_order_key",
+      );
+    if (isUniqueViolation) {
       const setCountRes = await context.client
         .from("workout_log_sets")
         .select("id", { head: true, count: "exact" })
@@ -501,6 +508,7 @@ async function buildSessionRows(
         Math.max(15, Math.floor(parseNumber(row.planned_rest_seconds, 60))),
       progression_action: recommendation?.progression_action ?? "maintain",
       recommendation_reason: recommendation?.recommendation_reason ?? [],
+      superset_group: planMap.get(planExerciseId)?.superset_group ?? null,
       completed_sets: Math.max(0, Math.floor(parseNumber(row.completed_sets, 0))),
       total_reps: Math.max(0, Math.floor(parseNumber(row.total_reps, 0))),
       total_volume_kg: Number(parseNumber(row.total_volume_kg, 0).toFixed(2)),
@@ -531,7 +539,7 @@ async function buildSessionRows(
     recommendations: recommendationRead.recommendations,
     exercises,
     cacheState: recommendationRead.cacheState,
-    cacheTtl: ttl,
+    cacheTtl: recommendationRead.cacheTtl,
   };
 }
 
@@ -773,6 +781,7 @@ function workoutStatusFromCalendar(status: CalendarStatus) {
 }
 
 export async function GET(request: NextRequest) {
+  const startedAtMs = Date.now();
   try {
     const context = await getWorkoutPlannerApiContext({
       routeKey: "workout-session-get",
@@ -804,6 +813,17 @@ export async function GET(request: NextRequest) {
       }
       throw sessionError;
     }
+    logger.info({
+      scope: "workout.session.start",
+      message: "Workout session loaded",
+      meta: {
+        user_id: context.current.profileId,
+        job_type: "session_start",
+        duration_ms: Date.now() - startedAtMs,
+        workout_log_id: session.workoutLog?.id ?? null,
+        workout_date: parsed.workoutDate,
+      },
+    });
     return NextResponse.json(session);
   } catch (error) {
     return toErrorResponse(error, "Failed to initialize workout session");
@@ -904,6 +924,7 @@ export async function DELETE(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  const startedAtMs = Date.now();
   try {
     const context = await getWorkoutPlannerApiContext({
       routeKey: "workout-session-finish",
@@ -1004,17 +1025,32 @@ export async function POST(request: NextRequest) {
       typeof logRes.data.plan_id === "string" && logRes.data.plan_id.length > 0
         ? logRes.data.plan_id
         : undefined;
-    void enqueueAiJob(context.adminClient, {
+    const immediatePayload = {
+      workoutLogId: parsed.workoutLogId,
+      workoutDate,
+      planId,
+      lookbackDays: 42,
+    };
+    await scheduleAiJob(context.adminClient, {
+      scope: "workout.session.finish.enqueue",
+      swallowErrors: true,
       userId: context.current.profileId,
       jobType: "session_finished",
-      payload: {
-        workoutLogId: parsed.workoutLogId,
-        workoutDate,
-        planId,
-        lookbackDays: 42,
-      },
+      payload: immediatePayload,
       dedupeKey: `session_finished:${context.current.profileId}:${parsed.workoutLogId}`,
-    }).catch(() => {});
+    });
+
+    logger.info({
+      scope: "workout.session.finish",
+      message: "Workout session finished",
+      meta: {
+        user_id: context.current.profileId,
+        job_type: "session_finish",
+        duration_ms: Date.now() - startedAtMs,
+        workout_log_id: parsed.workoutLogId,
+        workout_date: workoutDate,
+      },
+    });
 
     return NextResponse.json({
       workoutLog: updateRes.data,

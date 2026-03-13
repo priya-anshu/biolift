@@ -2,12 +2,10 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { useAuth } from "@/lib/auth/AuthContext";
 
 export default function SignUpPage() {
-  const router = useRouter();
   const { signUpWithPassword, signInWithGoogle, loading } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");

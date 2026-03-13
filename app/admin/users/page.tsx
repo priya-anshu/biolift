@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { motion } from "framer-motion";
 import { Search, ShieldCheck, User, Users } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -205,9 +206,11 @@ export default function AdminUsersPage() {
                     <div className="flex min-w-0 items-start gap-3">
                       <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full bg-day-hover text-xs font-semibold text-day-text-secondary dark:bg-night-hover dark:text-night-text-secondary">
                         {item.avatarUrl ? (
-                          <img
+                          <Image
                             src={item.avatarUrl}
                             alt={displayName}
+                            width={40}
+                            height={40}
                             className="h-10 w-10 rounded-full object-cover"
                           />
                         ) : (

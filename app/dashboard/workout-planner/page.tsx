@@ -1,12 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { CalendarDays, Pencil, RefreshCw, Sparkles } from "lucide-react";
+import { ArrowDown, ArrowUp, GripVertical, Plus, Search, Sparkles, Wand2 } from "lucide-react";
 import Card from "@/components/ui/Card";
 
-type ProgressionAction = "increase" | "maintain" | "reduce" | "deload" | "substitute";
-
-type PlanRow = {
+type Action = "increase" | "maintain" | "reduce" | "deload" | "substitute";
+type Plan = {
   id: string;
   name: string;
   goal: string;
@@ -16,267 +15,301 @@ type PlanRow = {
   planning_mode: "smart" | "manual";
   is_active: boolean;
 };
-
-type WorkoutTodayResponse = {
-  workoutDate: string;
+type PlanExercise = {
+  id: string;
+  plan_id: string;
+  day_index: number;
+  exercise_order: number;
+  exercise_id: string | null;
+  exercise_name: string;
+  muscle_group: string;
+  sets: number;
+  reps_min: number;
+  reps_max: number;
+  rest_seconds: number;
+  rpe: number | null;
+  superset_group: string | null;
+  difficulty_level: string;
+  equipment_required: string[];
+};
+type ExerciseCatalog = {
+  id: string;
+  name: string;
+  target_muscle: string;
+  difficulty_level: string;
+  equipment_required: string[];
+};
+type TodayResponse = {
   cacheState: string;
-  cacheTtl?: {
-    exists?: boolean;
-    isStale?: boolean;
-    updatedAt?: string | null;
-  };
-  plan: {
-    id: string;
-    name: string;
-    goal: string;
-    experience_level: string;
-    workout_days_per_week: number;
-    muscle_split: unknown;
-    is_active: boolean;
-  } | null;
-  recommendations: {
-    recommendations: Array<{
-      plan_exercise_id: string;
-      exercise_id: string | null;
-      recommended_weight: number | null;
-      recommended_reps: { min: number; max: number };
-      recommended_sets: number;
-      rest_seconds: number;
-      progression_action: ProgressionAction;
-      recommendation_reason: string[];
-    }>;
-  };
+  plan: { id: string; name: string } | null;
   previewExercises: Array<{
     plan_exercise_id: string;
     exercise_name: string;
-    muscle_group: string;
-    exercise_order: number;
     recommended_sets: number;
     recommended_reps: { min: number; max: number };
     recommended_weight: number | null;
     rest_seconds: number;
-    progression_action: ProgressionAction;
+    progression_action: Action;
     recommendation_reason: string[];
   }>;
   error?: string;
 };
 
-type SplitRow = {
-  dayIndex: number;
-  muscles: string[];
-};
+const templates = {
+  strength: { sets: 5, repsMin: 5, repsMax: 5, rest: 180, label: "Strength 5x5" },
+  hypertrophy: { sets: 4, repsMin: 8, repsMax: 12, rest: 90, label: "Hypertrophy 4x8-12" },
+  endurance: { sets: 3, repsMin: 12, repsMax: 15, rest: 60, label: "Endurance 3x12-15" },
+} as const;
 
-function normalizeGoal(goal: string) {
-  return goal.replaceAll("_", " ").replace(/\b\w/g, (char) => char.toUpperCase());
+function nice(text: string) {
+  return text.replaceAll("_", " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
-
-function actionBadgeClass(action: ProgressionAction) {
-  if (action === "increase") {
-    return "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300";
-  }
-  if (action === "maintain") {
-    return "bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-300";
-  }
-  if (action === "reduce") {
-    return "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300";
-  }
-  if (action === "deload") {
-    return "bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300";
-  }
+function badge(action: Action) {
+  if (action === "increase") return "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300";
+  if (action === "maintain") return "bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-300";
+  if (action === "reduce") return "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300";
+  if (action === "deload") return "bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300";
   return "bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300";
 }
-
-function actionLabel(action: ProgressionAction) {
-  return action.replaceAll("_", " ").replace(/\b\w/g, (char) => char.toUpperCase());
+function superset(value: string) {
+  const out = value.trim().toUpperCase().replace(/[^A-Z0-9_-]/g, "");
+  return out.length ? out.slice(0, 8) : null;
 }
-
-function parseMuscleSplit(raw: unknown): SplitRow[] {
-  if (!Array.isArray(raw)) return [];
-  return raw
-    .map((entry) => {
-      if (!entry || typeof entry !== "object") return null;
-      const row = entry as { dayIndex?: unknown; muscles?: unknown };
-      const dayIndex = Number(row.dayIndex ?? 0);
-      if (!Number.isFinite(dayIndex) || dayIndex < 1 || dayIndex > 7) return null;
-      const muscles = Array.isArray(row.muscles)
-        ? row.muscles.map((value) => String(value)).filter(Boolean)
-        : [];
-      return { dayIndex, muscles };
-    })
-    .filter((row): row is SplitRow => row !== null)
-    .sort((a, b) => a.dayIndex - b.dayIndex);
+function normalize(rows: PlanExercise[]) {
+  const sorted = [...rows].sort((a, b) => a.day_index - b.day_index || a.exercise_order - b.exercise_order);
+  const perDay = new Map<number, number>();
+  return sorted.map((row) => {
+    const day = Math.max(1, Math.min(7, Math.floor(Number(row.day_index) || 1)));
+    const ord = (perDay.get(day) ?? 0) + 1;
+    perDay.set(day, ord);
+    return {
+      ...row,
+      day_index: day,
+      exercise_order: ord,
+      sets: Math.max(1, Math.min(20, Math.floor(Number(row.sets) || 3))),
+      reps_min: Math.max(1, Math.min(120, Math.floor(Number(row.reps_min) || 8))),
+      reps_max: Math.max(1, Math.min(120, Math.floor(Number(row.reps_max) || 12))),
+      rest_seconds: Math.max(15, Math.min(900, Math.floor(Number(row.rest_seconds) || 60))),
+      superset_group: row.superset_group ? superset(row.superset_group) : null,
+    };
+  });
+}
+function newRow(planId: string, day: number, item: ExerciseCatalog): PlanExercise {
+  return {
+    id: `temp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    plan_id: planId,
+    day_index: day,
+    exercise_order: 1,
+    exercise_id: item.id,
+    exercise_name: item.name,
+    muscle_group: item.target_muscle,
+    sets: 3,
+    reps_min: 8,
+    reps_max: 12,
+    rest_seconds: 90,
+    rpe: 7,
+    superset_group: null,
+    difficulty_level: item.difficulty_level || "intermediate",
+    equipment_required: item.equipment_required ?? [],
+  };
 }
 
 export default function WorkoutPlannerPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [plans, setPlans] = useState<PlanRow[]>([]);
+  const [advanced, setAdvanced] = useState(false);
+  const [plans, setPlans] = useState<Plan[]>([]);
   const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
-  const [today, setToday] = useState<WorkoutTodayResponse | null>(null);
-  const [showWorkout, setShowWorkout] = useState(false);
-  const [advancedMode, setAdvancedMode] = useState(false);
-  const [isBusy, setIsBusy] = useState(false);
-  const [editingPlanId, setEditingPlanId] = useState<string | null>(null);
-  const [planEditForm, setPlanEditForm] = useState({
-    name: "",
-    goal: "general_fitness",
-    workoutDaysPerWeek: 4,
-  });
-  const [generateForm, setGenerateForm] = useState({
-    name: "AI Smart Program",
-    goal: "hypertrophy",
-    experienceLevel: "intermediate",
-    workoutDaysPerWeek: 4,
-    splitPreference: "push_pull_legs",
-  });
+  const [today, setToday] = useState<TodayResponse | null>(null);
+  const [showFull, setShowFull] = useState(false);
 
-  const activePlan = useMemo(() => plans.find((plan) => plan.is_active) ?? null, [plans]);
+  const [rows, setRows] = useState<PlanExercise[]>([]);
+  const [dirty, setDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [dragId, setDragId] = useState<string | null>(null);
+
+  const [query, setQuery] = useState("");
+  const [muscle, setMuscle] = useState("all");
+  const [difficulty, setDifficulty] = useState("all");
+  const [libraryDay, setLibraryDay] = useState(1);
+  const [results, setResults] = useState<ExerciseCatalog[]>([]);
+  const [suggestions, setSuggestions] = useState<ExerciseCatalog[]>([]);
+  const [searching, setSearching] = useState(false);
+
+  const [customName, setCustomName] = useState("");
+  const [customMuscle, setCustomMuscle] = useState("chest");
+  const [creating, setCreating] = useState(false);
+
   const selectedPlan = useMemo(
-    () => plans.find((plan) => plan.id === selectedPlanId) ?? activePlan,
-    [plans, selectedPlanId, activePlan],
+    () => plans.find((p) => p.id === selectedPlanId) ?? plans.find((p) => p.is_active) ?? null,
+    [plans, selectedPlanId],
   );
-  const splitRows = useMemo(
-    () => parseMuscleSplit(selectedPlan?.muscle_split),
-    [selectedPlan?.muscle_split],
-  );
+  const byDay = useMemo(() => {
+    const map = new Map<number, PlanExercise[]>();
+    rows.forEach((row) => {
+      const cur = map.get(row.day_index) ?? [];
+      cur.push(row);
+      map.set(row.day_index, cur);
+    });
+    return Array.from(map.entries()).sort((a, b) => a[0] - b[0]);
+  }, [rows]);
 
   const loadPlans = useCallback(async () => {
-    const response = await fetch("/api/workout-planner/plans", { cache: "no-store" });
-    const payload = (await response.json()) as { plans?: PlanRow[]; error?: string };
-    if (!response.ok) throw new Error(payload.error ?? "Failed to load plans");
-    const nextPlans = payload.plans ?? [];
-    setPlans(nextPlans);
-    if (nextPlans.length === 0) {
-      setSelectedPlanId(null);
-      return;
-    }
-    setSelectedPlanId((current) => {
-      if (current && nextPlans.some((plan) => plan.id === current)) return current;
-      return nextPlans.find((plan) => plan.is_active)?.id ?? nextPlans[0].id;
-    });
+    const res = await fetch("/api/workout-planner/plans", { cache: "no-store" });
+    const body = (await res.json()) as { plans?: Plan[]; error?: string };
+    if (!res.ok) throw new Error(body.error ?? "Failed to load plans");
+    const items = body.plans ?? [];
+    setPlans(items);
+    setSelectedPlanId((cur) => cur && items.some((p) => p.id === cur) ? cur : (items.find((p) => p.is_active)?.id ?? items[0]?.id ?? null));
   }, []);
 
-  const loadToday = useCallback(async (planId: string | null) => {
-    const params = new URLSearchParams({ lookbackDays: "42" });
-    if (planId) params.set("planId", planId);
-    const response = await fetch(`/api/workout/today?${params.toString()}`, {
-      cache: "no-store",
-    });
-    const payload = (await response.json()) as WorkoutTodayResponse;
-    if (!response.ok) throw new Error(payload.error ?? "Failed to load workout");
-    setToday(payload);
+  const loadToday = useCallback(async (planId: string) => {
+    const res = await fetch(`/api/workout/today?planId=${planId}&lookbackDays=42`, { cache: "no-store" });
+    const body = (await res.json()) as TodayResponse;
+    if (!res.ok) throw new Error(body.error ?? "Failed to load workout");
+    setToday(body);
   }, []);
 
-  const loadAll = useCallback(async () => {
+  const loadPlanDetail = useCallback(async (planId: string) => {
+    const res = await fetch(`/api/workout-planner/plans/${planId}`, { cache: "no-store" });
+    const body = (await res.json()) as { exercises?: PlanExercise[]; error?: string };
+    if (!res.ok) throw new Error(body.error ?? "Failed to load plan detail");
+    setRows(normalize(body.exercises ?? []));
+    setDirty(false);
+  }, []);
+
+  useEffect(() => {
     setLoading(true);
-    setError(null);
-    try {
-      await loadPlans();
-    } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "Failed to load planner");
-      setPlans([]);
-      setToday(null);
-    } finally {
-      setLoading(false);
-    }
+    void loadPlans().catch((e) => setError(e instanceof Error ? e.message : "Failed")).finally(() => setLoading(false));
   }, [loadPlans]);
 
   useEffect(() => {
-    void loadAll();
-  }, [loadAll]);
-
-  useEffect(() => {
-    if (!selectedPlanId) {
-      setToday(null);
-      return;
-    }
-    void loadToday(selectedPlanId).catch((loadError) => {
-      setToday(null);
-      setError(loadError instanceof Error ? loadError.message : "Failed to load workout");
-    });
-  }, [loadToday, selectedPlanId]);
-
-  const setPlanActive = async (planId: string) => {
-    setIsBusy(true);
-    setError(null);
-    setNotice(null);
-    try {
-      const response = await fetch(`/api/workout-planner/plans/${planId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ isActive: true }),
-      });
-      const payload = (await response.json()) as { error?: string };
-      if (!response.ok) throw new Error(payload.error ?? "Failed to activate plan");
-      setNotice("Active program updated.");
-      await loadPlans();
-    } catch (activateError) {
-      setError(activateError instanceof Error ? activateError.message : "Failed to activate plan");
-    } finally {
-      setIsBusy(false);
-    }
-  };
+    if (!selectedPlanId) return;
+    void Promise.all([loadToday(selectedPlanId), loadPlanDetail(selectedPlanId)]).catch((e) =>
+      setError(e instanceof Error ? e.message : "Failed"),
+    );
+  }, [loadToday, loadPlanDetail, selectedPlanId]);
 
   const generatePlan = async () => {
-    setIsBusy(true);
-    setError(null);
-    setNotice(null);
-    try {
-      const response = await fetch("/api/workout-planner/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ...generateForm,
-          preferredEquipment: ["barbell", "dumbbells", "cable machine"],
-          visibility: "private",
-        }),
-      });
-      const payload = (await response.json()) as { error?: string };
-      if (!response.ok) throw new Error(payload.error ?? "Failed to generate plan");
-      setNotice("New smart program generated.");
-      await loadPlans();
-    } catch (generateError) {
-      setError(generateError instanceof Error ? generateError.message : "Failed to generate plan");
-    } finally {
-      setIsBusy(false);
-    }
-  };
-
-  const beginEditPlan = (plan: PlanRow) => {
-    setEditingPlanId(plan.id);
-    setPlanEditForm({
-      name: plan.name,
-      goal: plan.goal,
-      workoutDaysPerWeek: plan.workout_days_per_week,
+    const res = await fetch("/api/workout-planner/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "AI Smart Program", goal: "hypertrophy", experienceLevel: "intermediate", workoutDaysPerWeek: 4, preferredEquipment: ["barbell", "dumbbells"], visibility: "private" }),
     });
+    const body = (await res.json()) as { error?: string };
+    if (!res.ok) throw new Error(body.error ?? "Failed to generate");
+    await loadPlans();
+    setNotice("Plan generated.");
   };
 
-  const savePlanEdit = async () => {
-    if (!editingPlanId) return;
-    setIsBusy(true);
-    setError(null);
-    setNotice(null);
+  const updateRow = (id: string, fn: (r: PlanExercise) => PlanExercise) => {
+    setRows((cur) => normalize(cur.map((r) => (r.id === id ? fn(r) : r))));
+    setDirty(true);
+  };
+
+  const saveBuilder = async () => {
+    if (!selectedPlanId || rows.length === 0) return;
+    setSaving(true);
     try {
-      const response = await fetch(`/api/workout-planner/plans/${editingPlanId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: planEditForm.name,
-          goal: planEditForm.goal,
-          workoutDaysPerWeek: planEditForm.workoutDaysPerWeek,
-        }),
-      });
-      const payload = (await response.json()) as { error?: string };
-      if (!response.ok) throw new Error(payload.error ?? "Failed to save plan");
-      setNotice("Program updated.");
-      setEditingPlanId(null);
-      await loadPlans();
-    } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : "Failed to save plan");
+      const exercises = normalize(rows).map((r) => ({ dayIndex: r.day_index, exerciseOrder: r.exercise_order, exerciseId: r.exercise_id, exerciseName: r.exercise_name, muscleGroup: r.muscle_group, sets: r.sets, repsMin: r.reps_min, repsMax: r.reps_max, restSeconds: r.rest_seconds, tempo: "2-0-2", rpe: r.rpe ?? 7, notes: "", supersetGroup: r.superset_group, difficultyLevel: (r.difficulty_level === "beginner" || r.difficulty_level === "advanced") ? r.difficulty_level : "intermediate", equipmentRequired: r.equipment_required, cloudinaryImageId: null, cloudinaryGifId: null, createdBy: "user", visibility: "private" }));
+      const res = await fetch(`/api/workout-planner/plans/${selectedPlanId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ exercises }) });
+      const body = (await res.json()) as { exercises?: PlanExercise[]; error?: string };
+      if (!res.ok) throw new Error(body.error ?? "Failed to save");
+      setRows(normalize(body.exercises ?? []));
+      setDirty(false);
+      setNotice("Workout builder saved.");
+      await loadToday(selectedPlanId);
     } finally {
-      setIsBusy(false);
+      setSaving(false);
     }
+  };
+
+  const runSearch = async (mode: "search" | "suggest") => {
+    if (!selectedPlanId && mode === "suggest") return;
+    setSearching(true);
+    try {
+      const params = new URLSearchParams({ limit: "20" });
+      if (query.trim()) params.set("q", query.trim());
+      if (muscle !== "all") params.set("muscle", muscle);
+      if (difficulty !== "all") params.set("difficulty", difficulty);
+      if (mode === "suggest") {
+        params.set("mode", "suggest");
+        params.set("planId", selectedPlanId!);
+        params.set("dayIndex", String(libraryDay));
+      }
+      const res = await fetch(`/api/workout-planner/exercises?${params.toString()}`, { cache: "no-store" });
+      const body = (await res.json()) as { exercises?: ExerciseCatalog[]; suggestions?: ExerciseCatalog[]; error?: string };
+      if (!res.ok) throw new Error(body.error ?? "Search failed");
+      if (mode === "search") setResults(body.exercises ?? []);
+      else setSuggestions(body.suggestions ?? []);
+    } finally {
+      setSearching(false);
+    }
+  };
+
+  const createCustom = async () => {
+    if (!customName.trim()) return;
+    setCreating(true);
+    try {
+      const res = await fetch("/api/workout-planner/exercises", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: customName.trim(), targetMuscle: customMuscle, difficultyLevel: selectedPlan?.experience_level ?? "intermediate", visibility: "private" }) });
+      const body = (await res.json()) as { exercise?: ExerciseCatalog; error?: string };
+      if (!res.ok || !body.exercise) throw new Error(body.error ?? "Create failed");
+      setRows((cur) => normalize([...cur, newRow(selectedPlanId!, libraryDay, body.exercise!)]));
+      setDirty(true);
+      setCustomName("");
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const addToPlan = (item: ExerciseCatalog) => {
+    if (!selectedPlanId) return;
+    setRows((cur) => normalize([...cur, newRow(selectedPlanId, libraryDay, item)]));
+    setDirty(true);
+  };
+
+  const removeRow = (id: string) => {
+    setRows((cur) => normalize(cur.filter((r) => r.id !== id)));
+    setDirty(true);
+  };
+
+  const moveRow = (id: string, dir: "up" | "down") => {
+    setRows((cur) => {
+      const next = normalize(cur);
+      const idx = next.findIndex((r) => r.id === id);
+      if (idx < 0) return next;
+      const row = next[idx];
+      const inDay = next.map((r, i) => ({ r, i })).filter((x) => x.r.day_index === row.day_index).map((x) => x.i);
+      const pos = inDay.indexOf(idx);
+      const swap = dir === "up" ? inDay[pos - 1] : inDay[pos + 1];
+      if (swap === undefined) return next;
+      [next[idx], next[swap]] = [next[swap], next[idx]];
+      return normalize(next);
+    });
+    setDirty(true);
+  };
+
+  const dropOnRow = (targetId: string) => {
+    if (!dragId || dragId === targetId) return;
+    setRows((cur) => {
+      const next = normalize(cur);
+      const from = next.findIndex((r) => r.id === dragId);
+      const to = next.findIndex((r) => r.id === targetId);
+      if (from < 0 || to < 0) return next;
+      const [moved] = next.splice(from, 1);
+      const insertAt = from < to ? to - 1 : to;
+      moved.day_index = next[insertAt]?.day_index ?? moved.day_index;
+      next.splice(insertAt, 0, moved);
+      return normalize(next);
+    });
+    setDirty(true);
+    setDragId(null);
+  };
+
+  const applyTemplate = (id: string, key: keyof typeof templates) => {
+    const t = templates[key];
+    updateRow(id, (r) => ({ ...r, sets: t.sets, reps_min: t.repsMin, reps_max: t.repsMax, rest_seconds: t.rest, rpe: 8 }));
   };
 
   return (
@@ -285,346 +318,150 @@ export default function WorkoutPlannerPage() {
         <div>
           <h1 className="text-2xl font-semibold">Workout Program</h1>
           <p className="mt-1 text-sm text-day-text-secondary dark:text-night-text-secondary">
-            Manage your current program. Execution happens in Workout Session.
+            Planner controls your program. Session execution happens on Workout Session.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => setAdvancedMode((current) => !current)}
-          className="rounded-lg border border-day-border px-3 py-2 text-sm font-semibold text-day-text-secondary hover:bg-day-hover dark:border-night-border dark:text-night-text-secondary dark:hover:bg-night-hover"
-        >
-          {advancedMode ? "Hide Advanced Settings" : "Advanced Settings"}
+        <button type="button" onClick={() => setAdvanced((v) => !v)} className="rounded-lg border border-day-border px-3 py-2 text-sm font-semibold text-day-text-secondary hover:bg-day-hover dark:border-night-border dark:text-night-text-secondary dark:hover:bg-night-hover">
+          {advanced ? "Hide Advanced" : "Advanced Mode"}
         </button>
       </section>
 
-      {error ? (
-        <Card className="p-4">
-          <p className="text-sm text-red-600 dark:text-red-300">{error}</p>
-        </Card>
-      ) : null}
-      {notice ? (
-        <Card className="p-4">
-          <p className="text-sm text-emerald-600 dark:text-emerald-300">{notice}</p>
-        </Card>
-      ) : null}
+      {error ? <Card className="p-4 text-sm text-red-600 dark:text-red-300">{error}</Card> : null}
+      {notice ? <Card className="p-4 text-sm text-emerald-600 dark:text-emerald-300">{notice}</Card> : null}
 
       <Card className="p-5 sm:p-6">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-wide text-day-text-secondary dark:text-night-text-secondary">
-              Current Program
-            </p>
+            <p className="text-xs font-semibold uppercase tracking-wide text-day-text-secondary dark:text-night-text-secondary">Current Program</p>
             <h2 className="mt-1 text-xl font-semibold">{selectedPlan?.name ?? "No plan yet"}</h2>
-            {selectedPlan ? (
-              <p className="mt-1 text-sm text-day-text-secondary dark:text-night-text-secondary">
-                Goal: {normalizeGoal(selectedPlan.goal)} | Level: {normalizeGoal(selectedPlan.experience_level)} | {selectedPlan.workout_days_per_week} days/week
-              </p>
-            ) : null}
+            {selectedPlan ? <p className="mt-1 text-sm text-day-text-secondary dark:text-night-text-secondary">Goal: {nice(selectedPlan.goal)} | {selectedPlan.workout_days_per_week} days/week | {nice(selectedPlan.experience_level)}</p> : null}
           </div>
           <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              disabled={isBusy}
-              onClick={() => void generatePlan()}
-              className="rounded-lg bg-day-accent-primary px-4 py-2 text-sm font-semibold text-white disabled:opacity-60 dark:bg-night-accent"
-            >
-              {isBusy ? "Working..." : "Generate Plan"}
-            </button>
-            {advancedMode && selectedPlan ? (
-              <button
-                type="button"
-                disabled={isBusy}
-                onClick={() => beginEditPlan(selectedPlan)}
-                className="inline-flex items-center gap-1 rounded-lg border border-day-border px-4 py-2 text-sm font-semibold text-day-text-secondary hover:bg-day-hover disabled:opacity-60 dark:border-night-border dark:text-night-text-secondary dark:hover:bg-night-hover"
-              >
-                <Pencil className="h-4 w-4" />
-                Edit Plan
-              </button>
-            ) : null}
-            <button
-              type="button"
-              onClick={() => setShowWorkout((current) => !current)}
-              className="inline-flex items-center gap-1 rounded-lg border border-day-border px-4 py-2 text-sm font-semibold text-day-text-secondary hover:bg-day-hover dark:border-night-border dark:text-night-text-secondary dark:hover:bg-night-hover"
-            >
-              <CalendarDays className="h-4 w-4" />
-              {showWorkout ? "Hide Full Workout" : "View Full Workout"}
+            <button type="button" onClick={() => void generatePlan().catch((e) => setError(e instanceof Error ? e.message : "Failed"))} className="rounded-lg bg-day-accent-primary px-4 py-2 text-sm font-semibold text-white dark:bg-night-accent">Generate Plan</button>
+            <button type="button" onClick={() => setShowFull((v) => !v)} className="inline-flex items-center gap-1 rounded-lg border border-day-border px-4 py-2 text-sm font-semibold text-day-text-secondary hover:bg-day-hover dark:border-night-border dark:text-night-text-secondary dark:hover:bg-night-hover">
+              <Sparkles className="h-4 w-4" />
+              {showFull ? "Hide Full Workout" : "View Full Workout"}
             </button>
           </div>
         </div>
-
         {loading ? <div className="skeleton mt-4 h-24 rounded-lg" /> : null}
-
-        {editingPlanId ? (
-          <div className="mt-4 grid gap-3 rounded-xl border border-day-border bg-day-hover/70 p-4 dark:border-night-border dark:bg-night-hover/60 md:grid-cols-3">
-            <label className="space-y-1 text-sm">
-              <span className="text-xs text-day-text-secondary dark:text-night-text-secondary">Program Name</span>
-              <input
-                value={planEditForm.name}
-                onChange={(event) =>
-                  setPlanEditForm((current) => ({ ...current, name: event.target.value }))
-                }
-                className="input-field"
-              />
-            </label>
-            <label className="space-y-1 text-sm">
-              <span className="text-xs text-day-text-secondary dark:text-night-text-secondary">Goal</span>
-              <select
-                value={planEditForm.goal}
-                onChange={(event) =>
-                  setPlanEditForm((current) => ({ ...current, goal: event.target.value }))
-                }
-                className="input-field"
-              >
-                <option value="fat_loss">Fat Loss</option>
-                <option value="hypertrophy">Hypertrophy</option>
-                <option value="strength">Strength</option>
-                <option value="general_fitness">General Fitness</option>
-              </select>
-            </label>
-            <label className="space-y-1 text-sm">
-              <span className="text-xs text-day-text-secondary dark:text-night-text-secondary">Days / Week</span>
-              <input
-                type="number"
-                min={1}
-                max={7}
-                value={planEditForm.workoutDaysPerWeek}
-                onChange={(event) =>
-                  setPlanEditForm((current) => ({
-                    ...current,
-                    workoutDaysPerWeek: Math.max(1, Math.min(7, Number(event.target.value))),
-                  }))
-                }
-                className="input-field"
-              />
-            </label>
-            <div className="md:col-span-3 flex gap-2">
-              <button
-                type="button"
-                onClick={() => void savePlanEdit()}
-                className="rounded-lg bg-day-accent-primary px-4 py-2 text-sm font-semibold text-white dark:bg-night-accent"
-              >
-                Save
-              </button>
-              <button
-                type="button"
-                onClick={() => setEditingPlanId(null)}
-                className="rounded-lg border border-day-border px-4 py-2 text-sm font-semibold text-day-text-secondary hover:bg-day-hover dark:border-night-border dark:text-night-text-secondary dark:hover:bg-night-hover"
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        ) : null}
-
-        {selectedPlan ? (
-          <div className="mt-4 grid gap-4 lg:grid-cols-2">
-            <div className="rounded-xl border border-day-border bg-day-hover/70 p-4 dark:border-night-border dark:bg-night-hover/60">
-              <div className="flex items-center gap-2 text-sm font-semibold">
-                <RefreshCw className="h-4 w-4 text-sky-500" />
-                Workout Split
-              </div>
-              <div className="mt-3 space-y-2">
-                {splitRows.length === 0 ? (
-                  <p className="text-sm text-day-text-secondary dark:text-night-text-secondary">Split not defined yet.</p>
-                ) : (
-                  splitRows.map((row) => (
-                    <div key={`split-${row.dayIndex}`} className="rounded-lg border border-day-border bg-day-card px-3 py-2 text-sm dark:border-night-border dark:bg-night-card">
-                      Day {row.dayIndex}: {row.muscles.join(", ") || "General"}
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-
-            <div className="rounded-xl border border-day-border bg-day-hover/70 p-4 dark:border-night-border dark:bg-night-hover/60">
-              <div className="text-sm font-semibold">Exercises Per Day</div>
-              <p className="mt-1 text-xs text-day-text-secondary dark:text-night-text-secondary">
-                AI recommendations are automatically applied to the active program.
-              </p>
-              <div className="mt-3 space-y-2">
-                {(today?.previewExercises ?? []).length === 0 ? (
-                  <p className="text-sm text-day-text-secondary dark:text-night-text-secondary">
-                    Using baseline plan - recommendations adapt after logged sessions.
-                  </p>
-                ) : (
-                  (today?.previewExercises ?? []).slice(0, 5).map((row) => (
-                    <div key={row.plan_exercise_id} className="rounded-lg border border-day-border bg-day-card px-3 py-2 text-sm dark:border-night-border dark:bg-night-card">
-                      {row.exercise_name} - {row.recommended_sets} x {row.recommended_reps.min}-{row.recommended_reps.max}
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-          </div>
-        ) : null}
       </Card>
 
-      {advancedMode ? (
+      {advanced ? (
         <Card className="p-5 sm:p-6">
-        <div className="text-sm font-semibold">Available Programs</div>
-        <div className="mt-3 space-y-2">
-          {plans.length === 0 ? (
-            <p className="text-sm text-day-text-secondary dark:text-night-text-secondary">
-              No programs yet. Generate your first smart program.
-            </p>
-          ) : (
-            plans.map((plan) => (
-              <div
-                key={plan.id}
-                className={`rounded-lg border px-3 py-3 ${
-                  selectedPlan?.id === plan.id
-                    ? "border-day-accent-primary bg-sky-50 dark:border-night-accent dark:bg-night-hover"
-                    : "border-day-border bg-day-card dark:border-night-border dark:bg-night-card"
-                }`}
-              >
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <p className="text-sm font-semibold">{plan.name}</p>
-                    <p className="text-xs text-day-text-secondary dark:text-night-text-secondary">
-                      {normalizeGoal(plan.goal)} | {plan.workout_days_per_week} days/week | {plan.planning_mode}
-                    </p>
-                  </div>
-                  <div className="flex gap-2">
-                    {!plan.is_active ? (
-                      <button
-                        type="button"
-                        disabled={isBusy}
-                        onClick={() => void setPlanActive(plan.id)}
-                        className="rounded-lg border border-day-border px-3 py-1.5 text-xs font-semibold text-day-text-secondary hover:bg-day-hover dark:border-night-border dark:text-night-text-secondary dark:hover:bg-night-hover"
-                      >
-                        Set Active
-                      </button>
-                    ) : (
-                      <span className="rounded-full bg-emerald-100 px-2 py-1 text-xs font-semibold text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">
-                        Active
-                      </span>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => setSelectedPlanId(plan.id)}
-                      className="rounded-lg border border-day-border px-3 py-1.5 text-xs font-semibold text-day-text-secondary hover:bg-day-hover dark:border-night-border dark:text-night-text-secondary dark:hover:bg-night-hover"
-                    >
-                      View
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ))
-          )}
-        </div>
-      </Card>
-      ) : null}
-
-      {showWorkout ? (
-        <Card className="p-5 sm:p-6">
-          <div className="flex items-center gap-2 text-lg font-semibold">
-            <Sparkles className="h-5 w-5 text-amber-500" />
-            Full Workout (AI Adjusted)
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-sm font-semibold">Plans</p>
+            <button type="button" disabled={!dirty || saving} onClick={() => void saveBuilder().catch((e) => setError(e instanceof Error ? e.message : "Save failed"))} className="rounded-lg bg-day-accent-primary px-4 py-2 text-sm font-semibold text-white disabled:opacity-50 dark:bg-night-accent">{saving ? "Saving..." : "Save Builder"}</button>
           </div>
-          <p className="mt-1 text-xs text-day-text-secondary dark:text-night-text-secondary">
-            Source: cached recommendations (`ai_recommendations`).
-          </p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {plans.map((p) => (
+              <button key={p.id} type="button" onClick={() => setSelectedPlanId(p.id)} className={`rounded-lg border px-3 py-1.5 text-xs font-semibold ${selectedPlan?.id === p.id ? "border-day-accent-primary bg-sky-50 dark:border-night-accent dark:bg-night-hover" : "border-day-border text-day-text-secondary dark:border-night-border dark:text-night-text-secondary"}`}>{p.name}{p.is_active ? " (Active)" : ""}</button>
+            ))}
+          </div>
+
+          <div className="mt-4 grid gap-3 md:grid-cols-5">
+            <input className="input-field md:col-span-2" placeholder="Exercise search" value={query} onChange={(e) => setQuery(e.target.value)} />
+            <select className="input-field" value={muscle} onChange={(e) => setMuscle(e.target.value)}>
+              <option value="all">All muscles</option><option value="chest">Chest</option><option value="back">Back</option><option value="legs">Legs</option><option value="shoulders">Shoulders</option><option value="arms">Arms</option><option value="core">Core</option>
+            </select>
+            <select className="input-field" value={difficulty} onChange={(e) => setDifficulty(e.target.value)}>
+              <option value="all">All levels</option><option value="beginner">Beginner</option><option value="intermediate">Intermediate</option><option value="advanced">Advanced</option>
+            </select>
+            <button type="button" onClick={() => void runSearch("search").catch((e) => setError(e instanceof Error ? e.message : "Search failed"))} className="inline-flex items-center justify-center gap-2 rounded-lg border border-day-border px-3 py-2 text-sm font-semibold text-day-text-secondary hover:bg-day-hover dark:border-night-border dark:text-night-text-secondary dark:hover:bg-night-hover"><Search className="h-4 w-4" />{searching ? "Searching..." : "Search"}</button>
+            <select className="input-field" value={String(libraryDay)} onChange={(e) => setLibraryDay(Math.max(1, Math.min(7, Number(e.target.value))))}>
+              {Array.from({ length: 7 }).map((_, i) => <option key={i + 1} value={i + 1}>Day {i + 1}</option>)}
+            </select>
+            <button type="button" onClick={() => void runSearch("suggest").catch((e) => setError(e instanceof Error ? e.message : "Suggest failed"))} className="inline-flex items-center justify-center gap-2 rounded-lg border border-day-border px-3 py-2 text-sm font-semibold text-day-text-secondary hover:bg-day-hover dark:border-night-border dark:text-night-text-secondary dark:hover:bg-night-hover md:col-span-2"><Wand2 className="h-4 w-4" />AI Suggestions</button>
+            <input className="input-field" placeholder="Custom exercise name" value={customName} onChange={(e) => setCustomName(e.target.value)} />
+            <select className="input-field" value={customMuscle} onChange={(e) => setCustomMuscle(e.target.value)}>
+              <option value="chest">Chest</option><option value="back">Back</option><option value="legs">Legs</option><option value="shoulders">Shoulders</option><option value="arms">Arms</option><option value="core">Core</option>
+            </select>
+            <button type="button" disabled={creating} onClick={() => void createCustom().catch((e) => setError(e instanceof Error ? e.message : "Create failed"))} className="inline-flex items-center justify-center gap-2 rounded-lg border border-day-border px-3 py-2 text-sm font-semibold text-day-text-secondary hover:bg-day-hover dark:border-night-border dark:text-night-text-secondary dark:hover:bg-night-hover"><Plus className="h-4 w-4" />{creating ? "Creating..." : "Create + Add"}</button>
+          </div>
+
+          <div className="mt-3 grid gap-4 lg:grid-cols-2">
+            <div className="rounded-xl border border-day-border bg-day-hover/70 p-3 dark:border-night-border dark:bg-night-hover/60">
+              <p className="text-sm font-semibold">Library</p>
+              <div className="mt-2 space-y-2">
+                {results.slice(0, 8).map((x) => (
+                  <div key={x.id} className="flex items-center justify-between gap-2 rounded-lg border border-day-border bg-day-card px-3 py-2 text-sm dark:border-night-border dark:bg-night-card">
+                    <div><p className="font-medium">{x.name}</p><p className="text-xs text-day-text-secondary dark:text-night-text-secondary">{nice(x.target_muscle)} | {nice(x.difficulty_level)}</p></div>
+                    <button type="button" onClick={() => addToPlan(x)} className="rounded-lg border border-day-border px-2 py-1 text-xs font-semibold text-day-text-secondary hover:bg-day-hover dark:border-night-border dark:text-night-text-secondary dark:hover:bg-night-hover">Add</button>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="rounded-xl border border-day-border bg-day-hover/70 p-3 dark:border-night-border dark:bg-night-hover/60">
+              <p className="text-sm font-semibold">AI Suggestions</p>
+              <div className="mt-2 space-y-2">
+                {suggestions.slice(0, 8).map((x) => (
+                  <div key={x.id} className="flex items-center justify-between gap-2 rounded-lg border border-day-border bg-day-card px-3 py-2 text-sm dark:border-night-border dark:bg-night-card">
+                    <div><p className="font-medium">{x.name}</p><p className="text-xs text-day-text-secondary dark:text-night-text-secondary">{nice(x.target_muscle)} | {nice(x.difficulty_level)}</p></div>
+                    <button type="button" onClick={() => addToPlan(x)} className="rounded-lg border border-day-border px-2 py-1 text-xs font-semibold text-day-text-secondary hover:bg-day-hover dark:border-night-border dark:text-night-text-secondary dark:hover:bg-night-hover">Add</button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
 
           <div className="mt-4 space-y-3">
-            {(today?.previewExercises ?? []).length === 0 ? (
-              <div className="rounded-lg border border-day-border bg-day-hover/70 px-3 py-3 text-sm text-day-text-secondary dark:border-night-border dark:bg-night-hover/60 dark:text-night-text-secondary">
-                Using baseline plan - recommendations will adapt after your workouts.
+            {byDay.map(([day, items]) => (
+              <div key={day} className="rounded-xl border border-day-border bg-day-hover/60 p-3 dark:border-night-border dark:bg-night-hover/50" onDragOver={(e) => e.preventDefault()} onDrop={() => { if (dragId) { updateRow(dragId, (r) => ({ ...r, day_index: day })); setDragId(null); } }}>
+                <p className="mb-2 text-sm font-semibold">Day {day}</p>
+                <div className="space-y-2">
+                  {items.map((r) => (
+                    <div key={r.id} draggable onDragStart={() => setDragId(r.id)} onDragEnd={() => setDragId(null)} onDragOver={(e) => e.preventDefault()} onDrop={() => dropOnRow(r.id)} className="rounded-lg border border-day-border bg-day-card p-3 dark:border-night-border dark:bg-night-card">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2"><GripVertical className="h-4 w-4 text-day-text-secondary dark:text-night-text-secondary" /><p className="text-sm font-semibold">#{r.exercise_order} {r.exercise_name}</p></div>
+                        <div className="flex gap-1">
+                          <button type="button" onClick={() => moveRow(r.id, "up")} className="rounded-md border border-day-border px-2 py-1 text-xs dark:border-night-border"><ArrowUp className="h-3 w-3" /></button>
+                          <button type="button" onClick={() => moveRow(r.id, "down")} className="rounded-md border border-day-border px-2 py-1 text-xs dark:border-night-border"><ArrowDown className="h-3 w-3" /></button>
+                          <button type="button" onClick={() => removeRow(r.id)} className="rounded-md border border-day-border px-2 py-1 text-xs text-red-600 dark:border-night-border dark:text-red-300">x</button>
+                        </div>
+                      </div>
+                      <div className="mt-2 grid gap-2 md:grid-cols-6">
+                        <input className="input-field" type="number" min={1} max={20} value={r.sets} onChange={(e) => updateRow(r.id, (x) => ({ ...x, sets: Number(e.target.value) || 1 }))} />
+                        <input className="input-field" type="number" min={1} max={120} value={r.reps_min} onChange={(e) => updateRow(r.id, (x) => ({ ...x, reps_min: Number(e.target.value) || 1 }))} />
+                        <input className="input-field" type="number" min={1} max={120} value={r.reps_max} onChange={(e) => updateRow(r.id, (x) => ({ ...x, reps_max: Number(e.target.value) || 1 }))} />
+                        <input className="input-field" type="number" min={15} max={900} value={r.rest_seconds} onChange={(e) => updateRow(r.id, (x) => ({ ...x, rest_seconds: Number(e.target.value) || 60 }))} />
+                        <input className="input-field" placeholder="Superset" value={r.superset_group ?? ""} onChange={(e) => updateRow(r.id, (x) => ({ ...x, superset_group: superset(e.target.value) }))} />
+                        <select className="input-field" defaultValue="" onChange={(e) => { const key = e.target.value as keyof typeof templates; if (key) applyTemplate(r.id, key); e.currentTarget.value = ""; }}>
+                          <option value="">Template</option>
+                          {Object.entries(templates).map(([k, t]) => <option key={`${r.id}-${k}`} value={k}>{t.label}</option>)}
+                        </select>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
+            ))}
+          </div>
+        </Card>
+      ) : null}
+
+      {showFull ? (
+        <Card className="p-5 sm:p-6">
+          <div className="flex items-center gap-2 text-lg font-semibold"><Sparkles className="h-5 w-5 text-amber-500" />Full Workout (AI Adjusted)</div>
+          <p className="mt-1 text-xs text-day-text-secondary dark:text-night-text-secondary">Cache: {today?.cacheState ?? "unknown"}</p>
+          <div className="mt-4 space-y-3">
+            {(today?.previewExercises ?? []).length === 0 ? (
+              <div className="rounded-lg border border-day-border bg-day-hover/70 px-3 py-3 text-sm text-day-text-secondary dark:border-night-border dark:bg-night-hover/60 dark:text-night-text-secondary">Using baseline plan - recommendations adapt after your workouts.</div>
             ) : (
-              (today?.previewExercises ?? []).map((row) => (
-                <div
-                  key={`full-${row.plan_exercise_id}`}
-                  className="rounded-xl border border-day-border bg-day-card p-4 dark:border-night-border dark:bg-night-card"
-                >
+              today?.previewExercises.map((row) => (
+                <div key={row.plan_exercise_id} className="rounded-xl border border-day-border bg-day-card p-4 dark:border-night-border dark:bg-night-card">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
                       <p className="text-sm font-semibold">{row.exercise_name}</p>
-                      <p className="text-xs text-day-text-secondary dark:text-night-text-secondary">
-                        {row.recommended_sets} sets x {row.recommended_reps.min}-{row.recommended_reps.max} reps | {row.recommended_weight === null ? "Auto load" : `${row.recommended_weight} kg`} | Rest {row.rest_seconds}s
-                      </p>
+                      <p className="text-xs text-day-text-secondary dark:text-night-text-secondary">{row.recommended_sets} sets x {row.recommended_reps.min}-{row.recommended_reps.max} reps | {row.recommended_weight === null ? "Auto" : `${row.recommended_weight} kg`} | Rest {row.rest_seconds}s</p>
                     </div>
-                    <span className={`rounded-full px-2 py-1 text-xs font-semibold ${actionBadgeClass(row.progression_action)}`}>
-                      {actionLabel(row.progression_action)}
-                    </span>
+                    <span className={`rounded-full px-2 py-1 text-xs font-semibold ${badge(row.progression_action)}`}>{nice(row.progression_action)}</span>
                   </div>
-                  {row.recommendation_reason.length > 0 ? (
-                    <p className="mt-2 text-xs text-day-text-secondary dark:text-night-text-secondary">
-                      AI: {row.recommendation_reason.join(" | ")}
-                    </p>
-                  ) : null}
+                  {row.recommendation_reason.length > 0 ? <p className="mt-2 text-xs text-day-text-secondary dark:text-night-text-secondary">AI: {row.recommendation_reason.join(" | ")}</p> : null}
                 </div>
               ))
             )}
           </div>
-
-          {advancedMode ? (
-            <div className="mt-4 rounded-lg border border-day-border bg-day-hover/70 px-3 py-3 text-xs text-day-text-secondary dark:border-night-border dark:bg-night-hover/60 dark:text-night-text-secondary">
-              Cache: {today?.cacheState ?? "unknown"}
-              {today?.cacheTtl?.updatedAt ? ` | Updated: ${new Date(today.cacheTtl.updatedAt).toLocaleString()}` : ""}
-              {today?.cacheTtl?.isStale ? " | Refresh queued" : ""}
-            </div>
-          ) : null}
         </Card>
-      ) : null}
-
-      {advancedMode ? (
-        <Card className="p-5 sm:p-6">
-        <div className="text-sm font-semibold">Quick Generate Options</div>
-        <div className="mt-3 grid gap-3 md:grid-cols-5">
-          <input
-            className="input-field md:col-span-2"
-            value={generateForm.name}
-            onChange={(event) =>
-              setGenerateForm((current) => ({ ...current, name: event.target.value }))
-            }
-            placeholder="Program name"
-          />
-          <select
-            className="input-field"
-            value={generateForm.goal}
-            onChange={(event) =>
-              setGenerateForm((current) => ({ ...current, goal: event.target.value }))
-            }
-          >
-            <option value="fat_loss">Fat Loss</option>
-            <option value="hypertrophy">Hypertrophy</option>
-            <option value="strength">Strength</option>
-            <option value="general_fitness">General Fitness</option>
-          </select>
-          <select
-            className="input-field"
-            value={generateForm.experienceLevel}
-            onChange={(event) =>
-              setGenerateForm((current) => ({ ...current, experienceLevel: event.target.value }))
-            }
-          >
-            <option value="beginner">Beginner</option>
-            <option value="intermediate">Intermediate</option>
-            <option value="advanced">Advanced</option>
-          </select>
-          <input
-            className="input-field"
-            type="number"
-            min={1}
-            max={7}
-            value={generateForm.workoutDaysPerWeek}
-            onChange={(event) =>
-              setGenerateForm((current) => ({
-                ...current,
-                workoutDaysPerWeek: Math.max(1, Math.min(7, Number(event.target.value))),
-              }))
-            }
-          />
-        </div>
-        <button
-          type="button"
-          disabled={isBusy}
-          onClick={() => void generatePlan()}
-          className="mt-3 rounded-lg bg-day-accent-primary px-4 py-2 text-sm font-semibold text-white disabled:opacity-60 dark:bg-night-accent"
-        >
-          {isBusy ? "Generating..." : "Generate Plan"}
-        </button>
-      </Card>
       ) : null}
     </div>
   );

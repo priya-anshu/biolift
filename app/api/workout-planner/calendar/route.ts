@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { apiErrorResponse } from "@/lib/server/api";
 import { getWorkoutPlannerApiContext } from "@/lib/workout-planner/apiContext";
 import { getCalendarMonth, upsertCalendarStatus } from "@/lib/workout-planner/service";
 import {
@@ -22,15 +23,9 @@ export async function GET(request: NextRequest) {
     );
     return NextResponse.json({ month, items });
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Failed to load calendar";
-    const status =
-      message === "Unauthorized"
-        ? 401
-        : message === "Rate limit exceeded"
-          ? 429
-          : 400;
-    return NextResponse.json({ error: message }, { status });
+    return apiErrorResponse(error, "Failed to load calendar", {
+      scope: "workout-planner.calendar.get",
+    });
   }
 }
 
@@ -49,14 +44,8 @@ export async function PUT(request: NextRequest) {
     );
     return NextResponse.json({ item });
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Failed to save calendar status";
-    const status =
-      message === "Unauthorized"
-        ? 401
-        : message === "Rate limit exceeded"
-          ? 429
-          : 400;
-    return NextResponse.json({ error: message }, { status });
+    return apiErrorResponse(error, "Failed to save calendar status", {
+      scope: "workout-planner.calendar.put",
+    });
   }
 }

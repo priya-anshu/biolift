@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { apiErrorResponse } from "@/lib/server/api";
 import { getWorkoutPlannerApiContext } from "@/lib/workout-planner/apiContext";
 import { upsertWorkoutLog } from "@/lib/workout-planner/service";
 import { validateWorkoutLogRequest } from "@/lib/workout-planner/validation";
@@ -18,14 +19,8 @@ export async function POST(request: NextRequest) {
     );
     return NextResponse.json({ log });
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Failed to update workout log";
-    const status =
-      message === "Unauthorized"
-        ? 401
-        : message === "Rate limit exceeded"
-          ? 429
-          : 400;
-    return NextResponse.json({ error: message }, { status });
+    return apiErrorResponse(error, "Failed to update workout log", {
+      scope: "workout-planner.logs",
+    });
   }
 }

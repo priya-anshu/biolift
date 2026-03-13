@@ -10,6 +10,7 @@ import type {
   CalendarStatusRequest,
   CalendarDayStatus,
   ManualPlanRequest,
+  PlanExerciseInput,
   PlannerRequest,
   WorkoutLogRequest,
   ExerciseCatalogRow,
@@ -30,6 +31,15 @@ type NormalizedRecommendationRequest = {
 export type WorkoutRecommendationRead = {
   recommendations: TrainingIntelligenceResult;
   cacheState: "exact" | "plan_fallback" | "baseline";
+  cacheTtl: {
+    exists: boolean;
+    isStale: boolean;
+    updatedAt: string | null;
+    planId: string;
+    workoutDate: string;
+    dayIndex: number;
+    lookbackDays: number;
+  };
 };
 
 const RECOMMENDATION_LOOKBACK_MIN = 14;
@@ -50,10 +60,107 @@ type WorkoutPlanInsert = {
   notes: string | null;
 };
 
+export type PlanExerciseRead = {
+  id: string;
+  plan_id: string;
+  day_index: number;
+  exercise_order: number;
+  exercise_id: string | null;
+  exercise_name: string;
+  muscle_group: string;
+  sets: number;
+  reps_min: number;
+  reps_max: number;
+  rest_seconds: number;
+  tempo: string | null;
+  rpe: number | null;
+  notes: string | null;
+  superset_group: string | null;
+  difficulty_level: string;
+  equipment_required: string[];
+  cloudinary_image_id: string | null;
+  cloudinary_gif_id: string | null;
+  created_by: "system" | "user";
+  visibility: "public" | "private";
+  created_at: string;
+  updated_at: string;
+};
+
+const EXERCISE_CATALOG_LIST_SELECT =
+  "id,slug,name,target_muscle,secondary_muscles,difficulty_level,equipment_required,cloudinary_image_id,cloudinary_gif_id,visibility";
+
+export type PlanWithExercisesRead = {
+  plan: {
+    id: string;
+    name: string;
+    goal: string;
+    experience_level: string;
+    workout_days_per_week: number;
+    muscle_split: unknown;
+    planning_mode: "smart" | "manual";
+    created_by: "system" | "user";
+    visibility: "public" | "private";
+    is_active: boolean;
+    notes: string | null;
+    created_at: string;
+    updated_at: string;
+  };
+  exercises: PlanExerciseRead[];
+};
+
+export type ExerciseSearchInput = {
+  query?: string;
+  muscle?: string;
+  difficulty?: string;
+  limit?: number;
+};
+
+export type CreateCustomExerciseInput = {
+  name: string;
+  targetMuscle: string;
+  secondaryMuscles?: string[];
+  difficultyLevel?: "beginner" | "intermediate" | "advanced";
+  equipmentRequired?: string[];
+  instructions?: string[];
+  cloudinaryImageId?: string | null;
+  cloudinaryGifId?: string | null;
+  visibility?: "public" | "private";
+};
+
+export type ExerciseSuggestionInput = {
+  planId: string;
+  dayIndex?: number;
+  limit?: number;
+  query?: string;
+};
+
 function toDayIndex(dateText: string) {
   const date = new Date(`${dateText}T00:00:00`);
   const day = date.getDay();
   return day === 0 ? 7 : day;
+}
+
+function normalizeToken(value: unknown) {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase();
+}
+
+function normalizeStringArray(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((entry) => String(entry ?? "").trim())
+    .filter(Boolean);
+}
+
+function slugifyExerciseName(value: string) {
+  return value
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9\s-]/g, "")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
 }
 
 function normalizeRecommendationInput(
@@ -148,7 +255,7 @@ async function loadCachedWorkoutRecommendations(
 ) {
   const cacheRes = await context.client
     .from("ai_recommendations")
-    .select("result_json,generated_at")
+    .select("result_json,generated_at,updated_at")
     .eq("user_id", context.profileId)
     .eq("plan_id", input.planId)
     .eq("workout_date", input.workoutDate)
@@ -173,7 +280,22 @@ async function loadCachedWorkoutRecommendations(
 
   const payload = cacheRes.data.result_json as TrainingIntelligenceResult | null;
   if (!payload || typeof payload !== "object") return null;
-  return payload;
+  return {
+    payload,
+    ttl: {
+      exists: true,
+      isStale: !isFresh,
+      updatedAt: cacheRes.data.updated_at
+        ? String(cacheRes.data.updated_at)
+        : cacheRes.data.generated_at
+          ? String(cacheRes.data.generated_at)
+          : null,
+      planId: input.planId,
+      workoutDate: input.workoutDate,
+      dayIndex: input.dayIndex,
+      lookbackDays: input.lookbackDays,
+    },
+  };
 }
 
 async function loadPlanFallbackWorkoutRecommendations(
@@ -387,6 +509,7 @@ async function insertPlan(
     tempo: string | null;
     rpe: number | null;
     notes: string | null;
+    superset_group: string | null;
     difficulty_level: string;
     equipment_required: string[];
     cloudinary_image_id: string | null;
@@ -464,6 +587,7 @@ export async function generateSmartPlan(
     tempo: row.tempo,
     rpe: row.rpe,
     notes: row.notes,
+    superset_group: row.supersetGroup ?? null,
     difficulty_level: row.difficultyLevel,
     equipment_required: row.equipmentRequired,
     cloudinary_image_id: row.cloudinaryImageId,
@@ -511,6 +635,7 @@ export async function createManualPlan(
     tempo: row.tempo ?? null,
     rpe: row.rpe ?? null,
     notes: row.notes ?? null,
+    superset_group: row.supersetGroup ?? null,
     difficulty_level: row.difficultyLevel,
     equipment_required: row.equipmentRequired ?? [],
     cloudinary_image_id: row.cloudinaryImageId ?? null,
@@ -535,6 +660,337 @@ export async function listUserPlans(context: ServiceContext) {
     throw new Error(plansRes.error.message);
   }
   return plansRes.data ?? [];
+}
+
+function mapPlanExerciseReadRow(row: Record<string, unknown>): PlanExerciseRead {
+  return {
+    id: String(row.id),
+    plan_id: String(row.plan_id),
+    day_index: clampIntValue(parseNumeric(row.day_index, 1), 1, 7),
+    exercise_order: Math.max(1, Math.floor(parseNumeric(row.exercise_order, 1))),
+    exercise_id:
+      typeof row.exercise_id === "string" && row.exercise_id.trim().length > 0
+        ? row.exercise_id
+        : null,
+    exercise_name: String(row.exercise_name ?? "Exercise"),
+    muscle_group: String(row.muscle_group ?? ""),
+    sets: clampIntValue(parseNumeric(row.sets, 3), 1, 20),
+    reps_min: clampIntValue(parseNumeric(row.reps_min, 8), 1, 120),
+    reps_max: Math.max(
+      clampIntValue(parseNumeric(row.reps_min, 8), 1, 120),
+      clampIntValue(parseNumeric(row.reps_max, 12), 1, 120),
+    ),
+    rest_seconds: clampIntValue(parseNumeric(row.rest_seconds, 60), 15, 900),
+    tempo: typeof row.tempo === "string" ? row.tempo : null,
+    rpe:
+      row.rpe === null || row.rpe === undefined ? null : Number(parseNumeric(row.rpe, 0).toFixed(1)),
+    notes: typeof row.notes === "string" ? row.notes : null,
+    superset_group:
+      typeof row.superset_group === "string" && row.superset_group.trim().length > 0
+        ? row.superset_group.trim().toUpperCase()
+        : null,
+    difficulty_level: String(row.difficulty_level ?? "intermediate"),
+    equipment_required: normalizeStringArray(row.equipment_required),
+    cloudinary_image_id:
+      typeof row.cloudinary_image_id === "string" ? row.cloudinary_image_id : null,
+    cloudinary_gif_id:
+      typeof row.cloudinary_gif_id === "string" ? row.cloudinary_gif_id : null,
+    created_by:
+      normalizeToken(row.created_by) === "user" ? "user" : "system",
+    visibility: normalizeToken(row.visibility) === "public" ? "public" : "private",
+    created_at: String(row.created_at ?? new Date().toISOString()),
+    updated_at: String(row.updated_at ?? new Date().toISOString()),
+  };
+}
+
+export async function getPlanWithExercises(
+  context: ServiceContext,
+  planId: string,
+): Promise<PlanWithExercisesRead> {
+  const planRes = await context.client
+    .from("workout_plans")
+    .select(
+      "id,name,goal,experience_level,workout_days_per_week,muscle_split,planning_mode,created_by,visibility,is_active,notes,created_at,updated_at",
+    )
+    .eq("id", planId)
+    .eq("user_id", context.profileId)
+    .maybeSingle();
+  if (planRes.error) throw new Error(planRes.error.message);
+  if (!planRes.data) throw new Error("Plan not found or not owned by user");
+
+  const exercisesRes = await context.client
+    .from("workout_plan_exercises")
+    .select(
+      "id,plan_id,day_index,exercise_order,exercise_id,exercise_name,muscle_group,sets,reps_min,reps_max,rest_seconds,tempo,rpe,notes,superset_group,difficulty_level,equipment_required,cloudinary_image_id,cloudinary_gif_id,created_by,visibility,created_at,updated_at",
+    )
+    .eq("plan_id", planId)
+    .order("day_index", { ascending: true })
+    .order("exercise_order", { ascending: true });
+  if (exercisesRes.error) throw new Error(exercisesRes.error.message);
+
+  const plan = {
+    id: String(planRes.data.id),
+    name: String(planRes.data.name ?? "Plan"),
+    goal: String(planRes.data.goal ?? "general_fitness"),
+    experience_level: String(planRes.data.experience_level ?? "intermediate"),
+    workout_days_per_week: clampIntValue(parseNumeric(planRes.data.workout_days_per_week, 4), 1, 7),
+    muscle_split: planRes.data.muscle_split ?? [],
+    planning_mode:
+      normalizeToken(planRes.data.planning_mode) === "manual" ? "manual" : "smart",
+    created_by:
+      normalizeToken(planRes.data.created_by) === "user" ? "user" : "system",
+    visibility: normalizeToken(planRes.data.visibility) === "public" ? "public" : "private",
+    is_active: Boolean(planRes.data.is_active),
+    notes: typeof planRes.data.notes === "string" ? planRes.data.notes : null,
+    created_at: String(planRes.data.created_at ?? new Date().toISOString()),
+    updated_at: String(planRes.data.updated_at ?? new Date().toISOString()),
+  } as PlanWithExercisesRead["plan"];
+
+  const exercises = (exercisesRes.data ?? []).map((row) =>
+    mapPlanExerciseReadRow(row as Record<string, unknown>),
+  );
+
+  return { plan, exercises };
+}
+
+export async function replacePlanExercises(
+  context: ServiceContext,
+  planId: string,
+  exercises: PlanExerciseInput[],
+) {
+  if (exercises.length === 0) {
+    throw new Error("At least one exercise is required");
+  }
+
+  const ownerRes = await context.client
+    .from("workout_plans")
+    .select("id,user_id")
+    .eq("id", planId)
+    .eq("user_id", context.profileId)
+    .maybeSingle();
+  if (ownerRes.error) throw new Error(ownerRes.error.message);
+  if (!ownerRes.data) throw new Error("Plan not found or not owned by user");
+
+  const sorted = [...exercises].sort((a, b) => {
+    if (a.dayIndex !== b.dayIndex) return a.dayIndex - b.dayIndex;
+    return a.exerciseOrder - b.exerciseOrder;
+  });
+
+  const rows = sorted.map((row, index) => ({
+    plan_id: planId,
+    day_index: clampIntValue(parseNumeric(row.dayIndex, 1), 1, 7),
+    exercise_order: index + 1,
+    exercise_id: row.exerciseId ?? null,
+    exercise_name: row.exerciseName,
+    muscle_group: row.muscleGroup,
+    sets: clampIntValue(parseNumeric(row.sets, 3), 1, 20),
+    reps_min: clampIntValue(parseNumeric(row.repsMin, 8), 1, 120),
+    reps_max: clampIntValue(parseNumeric(row.repsMax, 12), 1, 120),
+    rest_seconds: clampIntValue(parseNumeric(row.restSeconds, 60), 15, 900),
+    tempo: row.tempo ?? null,
+    rpe:
+      row.rpe === undefined || row.rpe === null
+        ? null
+        : Number(parseNumeric(row.rpe, 0).toFixed(1)),
+    notes: row.notes ?? null,
+    superset_group:
+      row.supersetGroup && row.supersetGroup.trim().length > 0
+        ? row.supersetGroup.trim().toUpperCase().slice(0, 8)
+        : null,
+    difficulty_level: row.difficultyLevel,
+    equipment_required: row.equipmentRequired ?? [],
+    cloudinary_image_id: row.cloudinaryImageId ?? null,
+    cloudinary_gif_id: row.cloudinaryGifId ?? null,
+    created_by: row.createdBy === "system" ? "system" : "user",
+    visibility: row.visibility === "public" ? "public" : "private",
+  }));
+
+  // Rebuild deterministic per-day exercise order.
+  const byDay = new Map<number, typeof rows>();
+  rows.forEach((row) => {
+    const current = byDay.get(row.day_index) ?? [];
+    current.push(row);
+    byDay.set(row.day_index, current);
+  });
+  const normalizedRows = Array.from(byDay.entries()).flatMap(([dayIndex, dayRows]) =>
+    dayRows.map((row, dayOrder) => ({
+      ...row,
+      day_index: dayIndex,
+      exercise_order: dayOrder + 1,
+    })),
+  );
+
+  const deleteRes = await context.client
+    .from("workout_plan_exercises")
+    .delete()
+    .eq("plan_id", planId);
+  if (deleteRes.error) throw new Error(deleteRes.error.message);
+
+  const insertRes = await context.client
+    .from("workout_plan_exercises")
+    .insert(normalizedRows);
+  if (insertRes.error) throw new Error(insertRes.error.message);
+
+  const split = splitSummary(
+    sorted.map((item) => ({ dayIndex: item.dayIndex, muscleGroup: item.muscleGroup })),
+  );
+  const touchRes = await context.client
+    .from("workout_plans")
+    .update({
+      muscle_split: split,
+      planning_mode: "manual",
+      created_by: "user",
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", planId)
+    .eq("user_id", context.profileId);
+  if (touchRes.error) throw new Error(touchRes.error.message);
+
+  return getPlanWithExercises(context, planId);
+}
+
+export async function searchExerciseCatalog(
+  context: ServiceContext,
+  input: ExerciseSearchInput,
+) {
+  const limit = clampIntValue(parseNumeric(input.limit, 40), 1, 100);
+  const normalizedQuery = normalizeToken(input.query);
+  const normalizedMuscle = normalizeToken(input.muscle);
+  const normalizedDifficulty = normalizeToken(input.difficulty);
+
+  let query = context.client
+    .from("exercises")
+    .select(EXERCISE_CATALOG_LIST_SELECT)
+    .order("name", { ascending: true })
+    .limit(limit);
+
+  if (normalizedMuscle) {
+    query = query.eq("target_muscle", normalizedMuscle);
+  }
+  if (normalizedDifficulty) {
+    query = query.eq("difficulty_level", normalizedDifficulty);
+  }
+  if (normalizedQuery) {
+    query = query.or(
+      `name.ilike.%${normalizedQuery}%,target_muscle.ilike.%${normalizedQuery}%`,
+    );
+  }
+
+  const res = await query;
+  if (res.error) throw new Error(res.error.message);
+  return res.data ?? [];
+}
+
+export async function createCustomExercise(
+  context: ServiceContext,
+  input: CreateCustomExerciseInput,
+) {
+  const name = String(input.name ?? "").trim();
+  const targetMuscle = normalizeToken(input.targetMuscle);
+  if (!name) {
+    throw new Error("Exercise name is required");
+  }
+  if (!targetMuscle) {
+    throw new Error("targetMuscle is required");
+  }
+  const difficulty =
+    normalizeToken(input.difficultyLevel) === "beginner" ||
+    normalizeToken(input.difficultyLevel) === "advanced"
+      ? (normalizeToken(input.difficultyLevel) as "beginner" | "advanced")
+      : "intermediate";
+
+  const baseSlug = slugifyExerciseName(name);
+  const candidateSlug = baseSlug.length > 0 ? baseSlug : `custom-${Date.now()}`;
+  const uniqueSuffix = Math.random().toString(36).slice(2, 7);
+  const slug = `${candidateSlug}-${uniqueSuffix}`;
+
+  const res = await context.client
+    .from("exercises")
+    .insert({
+      slug,
+      name,
+      target_muscle: targetMuscle,
+      secondary_muscles: normalizeStringArray(input.secondaryMuscles),
+      difficulty_level: difficulty,
+      equipment_required: normalizeStringArray(input.equipmentRequired),
+      instructions: normalizeStringArray(input.instructions),
+      cloudinary_image_id: input.cloudinaryImageId ?? null,
+      cloudinary_gif_id: input.cloudinaryGifId ?? null,
+      created_by: context.profileId,
+      visibility: input.visibility === "public" ? "public" : "private",
+    })
+    .select(
+      "id,slug,name,target_muscle,secondary_muscles,difficulty_level,equipment_required,instructions,cloudinary_image_id,cloudinary_gif_id,visibility",
+    )
+    .single();
+  if (res.error) throw new Error(res.error.message);
+  return res.data;
+}
+
+export async function getAiExerciseSuggestions(
+  context: ServiceContext,
+  input: ExerciseSuggestionInput,
+) {
+  const limit = clampIntValue(parseNumeric(input.limit, 8), 1, 20);
+  const plan = await getPlanWithExercises(context, input.planId);
+  const dayIndex = clampIntValue(
+    parseNumeric(input.dayIndex, toDayIndex(new Date().toISOString().slice(0, 10))),
+    1,
+    7,
+  );
+  const dayExercises = plan.exercises.filter((row) => row.day_index === dayIndex);
+  const targetMuscles = Array.from(
+    new Set(dayExercises.map((row) => normalizeToken(row.muscle_group)).filter(Boolean)),
+  );
+  const excludeIds = new Set(
+    dayExercises
+      .map((row) => row.exercise_id)
+      .filter((value): value is string => Boolean(value)),
+  );
+  const preferredDifficulty = normalizeToken(plan.plan.experience_level);
+  const queryText = normalizeToken(input.query);
+
+  let query = context.client
+    .from("exercises")
+    .select(EXERCISE_CATALOG_LIST_SELECT)
+    .limit(200);
+
+  if (targetMuscles.length > 0) {
+    query = query.in("target_muscle", targetMuscles);
+  }
+  if (preferredDifficulty === "beginner" || preferredDifficulty === "intermediate") {
+    query = query.in("difficulty_level", ["beginner", preferredDifficulty]);
+  }
+  if (queryText) {
+    query = query.or(`name.ilike.%${queryText}%,target_muscle.ilike.%${queryText}%`);
+  }
+
+  const res = await query;
+  if (res.error) throw new Error(res.error.message);
+
+  const rows = (res.data ?? [])
+    .filter((row) => !excludeIds.has(String(row.id)))
+    .map((row) => ({
+      row,
+      score:
+        (targetMuscles.includes(normalizeToken(row.target_muscle)) ? 3 : 0) +
+        (normalizeToken(row.difficulty_level) === preferredDifficulty ? 2 : 0) +
+        (dayExercises.some((item) =>
+          normalizeStringArray(item.equipment_required).some((eq) =>
+            normalizeStringArray(row.equipment_required).includes(eq),
+          ),
+        )
+          ? 1
+          : 0),
+    }))
+    .sort(
+      (a, b) =>
+        b.score - a.score || String(a.row.name).localeCompare(String(b.row.name)),
+    )
+    .slice(0, limit)
+    .map(({ row }) => row);
+
+  return rows;
 }
 
 export type UpdatePlanInput = {
@@ -916,6 +1372,15 @@ export async function getWorkoutRecommendations(
 ): Promise<WorkoutRecommendationRead> {
   const normalized = normalizeRecommendationInput(input);
   const planId = await resolvePlanIdForRecommendations(context, normalized.planId);
+  const cacheTtl = {
+    exists: false,
+    isStale: false,
+    updatedAt: null as string | null,
+    planId,
+    workoutDate: normalized.workoutDate,
+    dayIndex: normalized.dayIndex,
+    lookbackDays: normalized.lookbackDays,
+  };
   const cacheHit = await loadCachedWorkoutRecommendations(context, {
     planId,
     workoutDate: normalized.workoutDate,
@@ -925,8 +1390,9 @@ export async function getWorkoutRecommendations(
   });
   if (cacheHit) {
     return {
-      recommendations: cacheHit,
+      recommendations: cacheHit.payload,
       cacheState: "exact",
+      cacheTtl: cacheHit.ttl,
     };
   }
 
@@ -937,6 +1403,7 @@ export async function getWorkoutRecommendations(
     return {
       recommendations: planFallback,
       cacheState: "plan_fallback",
+      cacheTtl,
     };
   }
 
@@ -948,6 +1415,7 @@ export async function getWorkoutRecommendations(
   return {
     recommendations: baseline,
     cacheState: "baseline",
+    cacheTtl,
   };
 }
 
@@ -1080,14 +1548,14 @@ export async function getDashboardSummary(
     created_at: string;
   }>;
 
-  const logIds = logs.map((row) => row.id);
+  const recentLogIds = logs.slice(0, recentLimit).map((row) => row.id);
   const exerciseRes =
-    logIds.length > 0
+    recentLogIds.length > 0
       ? await context.client
           .from("workout_log_exercises")
           .select("workout_log_id,exercise_name,exercise_order")
           .eq("user_id", context.profileId)
-          .in("workout_log_id", logIds)
+          .in("workout_log_id", recentLogIds)
           .order("exercise_order", { ascending: true })
       : { data: [], error: null };
   if (exerciseRes.error) throw new Error(exerciseRes.error.message);
@@ -1684,7 +2152,7 @@ export async function getRankingOverview(context: ServiceContext) {
   const leaderboardRes = await context.client
     .from("leaderboard")
     .select(
-      "id,user_id,total_score,strength_score,stamina_score,consistency_score,improvement_score,tier,position,activity_days_14d,streak_days,updated_at,profiles(name,email,avatar_url)",
+      "id,user_id,total_score,strength_score,stamina_score,consistency_score,improvement_score,tier,position,activity_days_14d,streak_days,updated_at,profiles(name,avatar_url)",
     )
     .order("total_score", { ascending: false })
     .limit(100);

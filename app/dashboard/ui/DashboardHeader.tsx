@@ -32,7 +32,7 @@ const ENABLE_SHOP_NAV = process.env.NEXT_PUBLIC_FEATURE_SHOP === "true";
 
 export default function DashboardHeader() {
   const { user, signOut } = useAuth();
-  const { isDarkMode, toggleTheme } = useTheme();
+  const { isDarkMode, isHydrated, toggleTheme } = useTheme();
   const router = useRouter();
   const pathname = usePathname();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -134,7 +134,15 @@ export default function DashboardHeader() {
             className="rounded-full border border-day-border p-2 text-day-text-secondary dark:border-night-border dark:text-night-text-secondary"
             aria-label="Toggle theme"
           >
-            {isDarkMode ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
+            {isHydrated ? (
+              isDarkMode ? (
+                <Sun className="h-5 w-5" />
+              ) : (
+                <Moon className="h-5 w-5" />
+              )
+            ) : (
+              <Moon className="h-5 w-5" />
+            )}
           </button>
           <div className="relative">
             <button className="rounded-full border border-day-border p-2 text-day-text-secondary dark:border-night-border dark:text-night-text-secondary">

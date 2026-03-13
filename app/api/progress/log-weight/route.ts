@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { apiErrorResponse } from "@/lib/server/api";
 import { getWorkoutPlannerApiContext } from "@/lib/workout-planner/apiContext";
 import { logBodyWeightEntry } from "@/lib/workout-planner/service";
 
@@ -36,14 +37,8 @@ export async function POST(request: NextRequest) {
     );
     return NextResponse.json({ entry });
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Failed to log body weight";
-    const status =
-      message === "Unauthorized"
-        ? 401
-        : message === "Rate limit exceeded"
-          ? 429
-          : 400;
-    return NextResponse.json({ error: message }, { status });
+    return apiErrorResponse(error, "Failed to log body weight", {
+      scope: "progress.log-weight",
+    });
   }
 }

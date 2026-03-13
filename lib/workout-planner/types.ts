@@ -47,6 +47,7 @@ export type PlanExerciseInput = {
   tempo?: string;
   rpe?: number;
   notes?: string;
+  supersetGroup?: string | null;
   difficultyLevel: ExperienceLevel;
   equipmentRequired?: string[];
   cloudinaryImageId?: string | null;
@@ -111,6 +112,7 @@ export type PlannedExercise = {
   tempo: string;
   rpe: number;
   notes: string;
+  supersetGroup?: string | null;
   difficultyLevel: ExperienceLevel;
   equipmentRequired: string[];
   cloudinaryImageId: string | null;

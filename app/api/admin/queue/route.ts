@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { apiErrorResponse } from "@/lib/server/api";
 import {
   AdminAuthError,
   fetchAllProfiles,
@@ -38,6 +39,7 @@ export async function GET() {
     if (error) {
       return NextResponse.json(
         {
+          success: false,
           error:
             "Queue table is not available. Run ranking queue SQL files first.",
         },
@@ -68,10 +70,11 @@ export async function GET() {
 
     return NextResponse.json({ items });
   } catch (error) {
-    if (error instanceof AdminAuthError) {
-      return NextResponse.json({ error: error.message }, { status: error.status });
-    }
-    return NextResponse.json({ error: "Failed to load queue." }, { status: 500 });
+    return apiErrorResponse(
+      error instanceof AdminAuthError ? new Error(error.message) : error,
+      "Failed to load queue.",
+      { scope: "admin.queue.get" },
+    );
   }
 }
 
@@ -82,7 +85,7 @@ export async function PATCH(request: NextRequest) {
 
     if (!body.id || !body.status || !["approved", "rejected"].includes(body.status)) {
       return NextResponse.json(
-        { error: "Invalid payload. Expected id and status." },
+        { success: false, error: "Invalid payload. Expected id and status." },
         { status: 400 },
       );
     }
@@ -99,16 +102,17 @@ export async function PATCH(request: NextRequest) {
 
     if (error) {
       return NextResponse.json(
-        { error: `Failed to update request: ${error.message}` },
+        { success: false, error: `Failed to update request: ${error.message}` },
         { status: 400 },
       );
     }
 
     return NextResponse.json({ success: true });
   } catch (error) {
-    if (error instanceof AdminAuthError) {
-      return NextResponse.json({ error: error.message }, { status: error.status });
-    }
-    return NextResponse.json({ error: "Failed to update queue item." }, { status: 500 });
+    return apiErrorResponse(
+      error instanceof AdminAuthError ? new Error(error.message) : error,
+      "Failed to update queue item.",
+      { scope: "admin.queue.patch" },
+    );
   }
 }

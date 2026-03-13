@@ -3,6 +3,7 @@ import type { TrainingIntelligenceResult } from "@/lib/workout-planner/intellige
 import { logger } from "@/lib/server/logger";
 import { getRecoveryState } from "@/lib/workout-planner/recoveryEngine";
 import { getTrainingLoadState } from "@/lib/workout-planner/trainingLoadEngine";
+import { getMuscleFatigueState } from "@/lib/workout-planner/muscleFatigueEngine";
 
 type BrainContext = {
   client: SupabaseClient;
@@ -27,6 +28,22 @@ type AdaptationStateRow = {
   fatigue_modifier: number | null;
   progression_modifier: number | null;
   last_trained_at: string | null;
+};
+
+type PlanExerciseContextRow = {
+  id: string;
+  exercise_id: string | null;
+  muscle_group: string | null;
+  difficulty_level: string | null;
+  equipment_required: string[];
+};
+
+type ExerciseCatalogRow = {
+  id: string;
+  name: string;
+  target_muscle: string | null;
+  difficulty_level: string | null;
+  equipment_required: string[];
 };
 
 type RecommendationContext = {
@@ -93,6 +110,36 @@ function chunk<T>(items: T[], size: number) {
     out.push(items.slice(i, i + size));
   }
   return out;
+}
+
+function normalizeToken(value: string | null | undefined) {
+  return (value ?? "").trim().toLowerCase();
+}
+
+function toStringArray(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => (typeof item === "string" ? item : String(item ?? "")))
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function difficultyRank(level: string | null | undefined) {
+  const normalized = normalizeToken(level);
+  if (normalized === "beginner") return 1;
+  if (normalized === "intermediate") return 2;
+  return 3;
+}
+
+function volumeRangeByExperience(experienceLevel: string | null | undefined) {
+  const normalized = normalizeToken(experienceLevel);
+  if (normalized === "beginner") {
+    return { min: 8, max: 12 };
+  }
+  if (normalized === "advanced") {
+    return { min: 16, max: 22 };
+  }
+  return { min: 12, max: 18 };
 }
 
 async function loadAdaptationStateRows(
@@ -398,6 +445,170 @@ async function loadInjuryLevels(context: BrainContext, exerciseIds: string[]) {
   return map;
 }
 
+async function loadActiveInjuryExerciseIds(context: BrainContext) {
+  const injuryRes = await context.client
+    .from("injury_flags")
+    .select("exercise_id,status")
+    .eq("user_id", context.profileId)
+    .in("status", ["active", "monitoring", "recovering"])
+    .not("exercise_id", "is", null);
+  if (injuryRes.error) throw new Error(injuryRes.error.message);
+
+  return new Set(
+    (injuryRes.data ?? [])
+      .map((row) => (row.exercise_id ? String(row.exercise_id) : ""))
+      .filter(Boolean),
+  );
+}
+
+async function loadPlanExerciseContextRows(
+  context: BrainContext,
+  planExerciseIds: string[],
+) {
+  if (planExerciseIds.length === 0) {
+    return [] as PlanExerciseContextRow[];
+  }
+  const res = await context.client
+    .from("workout_plan_exercises")
+    .select("id,exercise_id,muscle_group,difficulty_level,equipment_required")
+    .in("id", planExerciseIds);
+  if (res.error) throw new Error(res.error.message);
+  return (res.data ?? []).map((row) => ({
+    id: String(row.id),
+    exercise_id: row.exercise_id ? String(row.exercise_id) : null,
+    muscle_group: row.muscle_group ? String(row.muscle_group) : null,
+    difficulty_level: row.difficulty_level ? String(row.difficulty_level) : null,
+    equipment_required: toStringArray(row.equipment_required),
+  })) as PlanExerciseContextRow[];
+}
+
+async function loadPlanExperienceLevel(context: BrainContext, planId: string) {
+  const res = await context.client
+    .from("workout_plans")
+    .select("experience_level")
+    .eq("id", planId)
+    .eq("user_id", context.profileId)
+    .maybeSingle();
+  if (res.error) throw new Error(res.error.message);
+  return res.data?.experience_level ? String(res.data.experience_level) : "intermediate";
+}
+
+async function loadExerciseCatalogRows(
+  context: BrainContext,
+  input: { targetMuscles: string[]; includeExerciseIds: string[] },
+) {
+  const normalizedMuscles = Array.from(
+    new Set(input.targetMuscles.map((muscle) => normalizeToken(muscle)).filter(Boolean)),
+  );
+  const normalizedExerciseIds = Array.from(
+    new Set(input.includeExerciseIds.filter(Boolean)),
+  );
+
+  const [muscleRes, idRes] = await Promise.all([
+    normalizedMuscles.length > 0
+      ? context.client
+          .from("exercises")
+          .select("id,name,target_muscle,difficulty_level,equipment_required")
+          .in("target_muscle", normalizedMuscles)
+          .limit(2000)
+      : Promise.resolve({ data: [], error: null }),
+    normalizedExerciseIds.length > 0
+      ? context.client
+          .from("exercises")
+          .select("id,name,target_muscle,difficulty_level,equipment_required")
+          .in("id", normalizedExerciseIds)
+      : Promise.resolve({ data: [], error: null }),
+  ]);
+
+  if (muscleRes.error) throw new Error(muscleRes.error.message);
+  if (idRes.error) throw new Error(idRes.error.message);
+
+  const combined = [...(muscleRes.data ?? []), ...(idRes.data ?? [])];
+  const unique = new Map<string, ExerciseCatalogRow>();
+  combined.forEach((row) => {
+    const id = String(row.id);
+    unique.set(id, {
+      id,
+      name: String(row.name ?? ""),
+      target_muscle: row.target_muscle ? String(row.target_muscle) : null,
+      difficulty_level: row.difficulty_level ? String(row.difficulty_level) : null,
+      equipment_required: toStringArray(row.equipment_required),
+    });
+  });
+  return Array.from(unique.values());
+}
+
+function buildWeeklySetsByMuscle(input: {
+  workoutDate: string;
+  recommendations: TrainingIntelligenceResult["recommendations"];
+  sessionsByExerciseId: Map<string, SessionAggregate[]>;
+  planExerciseMap: Map<string, PlanExerciseContextRow>;
+  exerciseCatalogMap: Map<string, ExerciseCatalogRow>;
+}) {
+  const sinceDate = daysAgo(input.workoutDate, 7);
+  const byMuscle = new Map<string, number>();
+
+  input.recommendations.forEach((recommendation) => {
+    const exerciseId = recommendation.exercise_id;
+    if (!exerciseId) return;
+    const planExercise = input.planExerciseMap.get(recommendation.plan_exercise_id) ?? null;
+    const catalogExercise = input.exerciseCatalogMap.get(exerciseId) ?? null;
+    const muscleGroup =
+      normalizeToken(planExercise?.muscle_group) ||
+      normalizeToken(catalogExercise?.target_muscle);
+    if (!muscleGroup) return;
+
+    const weeklySets = (input.sessionsByExerciseId.get(exerciseId) ?? [])
+      .filter((session) => session.workoutDate >= sinceDate)
+      .reduce((sum, session) => sum + session.completedSets, 0);
+    const current = byMuscle.get(muscleGroup) ?? 0;
+    byMuscle.set(muscleGroup, current + weeklySets);
+  });
+
+  return byMuscle;
+}
+
+function selectRotationCandidate(input: {
+  recommendation: TrainingIntelligenceResult["recommendations"][number];
+  planExercise: PlanExerciseContextRow | null;
+  currentExercise: ExerciseCatalogRow | null;
+  exerciseCatalog: ExerciseCatalogRow[];
+  injuredExerciseIds: Set<string>;
+  recentlyUsedExerciseIds: Set<string>;
+}) {
+  const targetMuscle =
+    normalizeToken(input.planExercise?.muscle_group) ||
+    normalizeToken(input.currentExercise?.target_muscle);
+  if (!targetMuscle) return null;
+
+  const targetDifficulty = difficultyRank(
+    input.planExercise?.difficulty_level ?? input.currentExercise?.difficulty_level,
+  );
+  const targetEquipment = new Set(
+    (input.planExercise?.equipment_required ?? input.currentExercise?.equipment_required ?? []).map(
+      (equipment) => normalizeToken(equipment),
+    ),
+  );
+  const currentExerciseId = input.recommendation.exercise_id;
+
+  const candidates = input.exerciseCatalog
+    .filter((exercise) => normalizeToken(exercise.target_muscle) === targetMuscle)
+    .filter((exercise) => exercise.id !== currentExerciseId)
+    .filter((exercise) => !input.injuredExerciseIds.has(exercise.id))
+    .map((exercise) => {
+      const difficultyGap = Math.abs(difficultyRank(exercise.difficulty_level) - targetDifficulty);
+      const equipmentOverlap = exercise.equipment_required
+        .map((equipment) => normalizeToken(equipment))
+        .filter((equipment) => targetEquipment.has(equipment)).length;
+      const recentPenalty = input.recentlyUsedExerciseIds.has(exercise.id) ? 1 : 0;
+      const score = equipmentOverlap * 3 - difficultyGap * 2 - recentPenalty * 4;
+      return { exercise, score };
+    })
+    .sort((a, b) => b.score - a.score);
+
+  return candidates[0]?.exercise ?? null;
+}
+
 function computeFailureRate(
   setRows: RecommendationContext["setRows"],
   workoutDate: string,
@@ -461,9 +672,26 @@ export async function applyTrainingBrain(
   if (exerciseIds.length === 0) {
     return input.result;
   }
+  const planExerciseIds = Array.from(
+    new Set(
+      input.result.recommendations
+        .map((row) => row.plan_exercise_id)
+        .filter((value): value is string => Boolean(value)),
+    ),
+  );
 
   try {
-    const [stateRows, historyContext, fatigueSignal, injuries, trainingLoadState] = await Promise.all([
+    const [
+      stateRows,
+      historyContext,
+      fatigueSignal,
+      injuries,
+      activeInjuryExerciseIds,
+      trainingLoadState,
+      muscleFatigueRows,
+      planExerciseRows,
+      experienceLevel,
+    ] = await Promise.all([
       loadAdaptationStateRows(context, exerciseIds),
       loadRecentExerciseContext(context, {
         exerciseIds,
@@ -471,10 +699,72 @@ export async function applyTrainingBrain(
       }),
       loadFatigueSignal(context, input.workoutDate),
       loadInjuryLevels(context, exerciseIds),
+      loadActiveInjuryExerciseIds(context),
       getTrainingLoadState(context),
+      getMuscleFatigueState(context),
+      loadPlanExerciseContextRows(context, planExerciseIds),
+      loadPlanExperienceLevel(context, input.result.plan_id),
     ]);
 
+    const targetMuscles = planExerciseRows
+      .map((row) => row.muscle_group)
+      .filter((value): value is string => Boolean(value));
+    const exerciseCatalogRows = await loadExerciseCatalogRows(context, {
+      targetMuscles,
+      includeExerciseIds: exerciseIds,
+    });
+
     const stateMap = new Map(stateRows.map((row) => [row.exercise_id, row]));
+    const planExerciseMap = new Map(planExerciseRows.map((row) => [row.id, row]));
+    const exerciseCatalogMap = new Map(exerciseCatalogRows.map((row) => [row.id, row]));
+    const muscleFatigueMap = new Map(
+      (muscleFatigueRows ?? []).map((row) => [
+        normalizeToken(row.muscle_group),
+        row,
+      ]),
+    );
+    const weeklySetsByMuscle = buildWeeklySetsByMuscle({
+      workoutDate: input.workoutDate,
+      recommendations: input.result.recommendations,
+      sessionsByExerciseId: historyContext.sessionsByExerciseId,
+      planExerciseMap,
+      exerciseCatalogMap,
+    });
+    const recentlyUsedExerciseIds = new Set(
+      Array.from(historyContext.sessionsByExerciseId.entries())
+        .filter(([, sessions]) => sessions.length > 0)
+        .map(([exerciseId]) => exerciseId),
+    );
+
+    const readinessScore = fatigueSignal.readinessAvg;
+    const readinessBelow40 = readinessScore !== null && readinessScore < 40;
+    const readinessBelow30 = readinessScore !== null && readinessScore < 30;
+    const overtrainingRisk = toNullableNumber(trainingLoadState?.overtraining_risk);
+    const plateauRisk = toNullableNumber(trainingLoadState?.plateau_risk);
+    const loadAcwr = toNullableNumber(trainingLoadState?.acwr);
+    const overtrainingHigh = (overtrainingRisk ?? 0) >= 70;
+    const plateauHigh = (plateauRisk ?? 0) >= 70;
+    const highFatigueMuscleCount = (muscleFatigueRows ?? []).filter(
+      (row) => toNumber(row.fatigue_score, 0) >= 70,
+    ).length;
+    const highFatigueAcrossMuscles = highFatigueMuscleCount >= 2;
+    const trainingLoadUpdatedAtMs =
+      trainingLoadState?.updated_at && !Number.isNaN(new Date(trainingLoadState.updated_at).getTime())
+        ? new Date(trainingLoadState.updated_at).getTime()
+        : null;
+    const deloadTriggeredNow =
+      (loadAcwr ?? 0) > 1.5 &&
+      (readinessScore ?? 100) < 35 &&
+      highFatigueAcrossMuscles;
+    const deloadCarryWindowActive =
+      !deloadTriggeredNow &&
+      trainingLoadUpdatedAtMs !== null &&
+      Date.now() - trainingLoadUpdatedAtMs <= 7 * 24 * 60 * 60 * 1000 &&
+      (loadAcwr ?? 1) >= 1.3 &&
+      (readinessScore ?? 100) < 45 &&
+      highFatigueAcrossMuscles;
+    const autoDeloadActive = deloadTriggeredNow || deloadCarryWindowActive;
+    const volumeRange = volumeRangeByExperience(experienceLevel);
 
     const recommendations = input.result.recommendations.map((recommendation) => {
       const exerciseId = recommendation.exercise_id;
@@ -491,6 +781,21 @@ export async function applyTrainingBrain(
         state,
         injuryLevel,
       };
+      const planExercise = planExerciseMap.get(recommendation.plan_exercise_id) ?? null;
+      const catalogExercise = exerciseCatalogMap.get(exerciseId) ?? null;
+      const muscleGroup =
+        normalizeToken(planExercise?.muscle_group) ||
+        normalizeToken(catalogExercise?.target_muscle);
+      const muscleFatigue = muscleGroup
+        ? muscleFatigueMap.get(muscleGroup) ?? null
+        : null;
+      const muscleFatigueScore = muscleFatigue
+        ? toNumber(muscleFatigue.fatigue_score, 0)
+        : null;
+      const highMuscleFatigue =
+        muscleFatigueScore !== null && muscleFatigueScore >= 70;
+      const veryHighMuscleFatigue =
+        muscleFatigueScore !== null && muscleFatigueScore >= 85;
 
       const lastTwo = ctx.sessions.slice(0, 2);
       const exceededLastTwo =
@@ -506,14 +811,6 @@ export async function applyTrainingBrain(
 
       let action: "increase" | "maintain" | "reduce" | "deload" = "maintain";
       const reasons = [...recommendation.recommendation_reason];
-      const readinessScore = fatigueSignal.readinessAvg;
-      const readinessBelow40 = readinessScore !== null && readinessScore < 40;
-      const readinessBelow30 = readinessScore !== null && readinessScore < 30;
-      const overtrainingRisk = toNullableNumber(trainingLoadState?.overtraining_risk);
-      const plateauRisk = toNullableNumber(trainingLoadState?.plateau_risk);
-      const loadAcwr = toNullableNumber(trainingLoadState?.acwr);
-      const overtrainingHigh = (overtrainingRisk ?? 0) >= 70;
-      const plateauHigh = (plateauRisk ?? 0) >= 70;
 
       if (acwr > 1.5) {
         action = "deload";
@@ -530,6 +827,11 @@ export async function applyTrainingBrain(
         } else {
           reasons.push("Moderate injury risk detected, reduce progression");
         }
+      } else if (highMuscleFatigue && failureRate >= 0.2) {
+        action = "reduce";
+        reasons.push(
+          `Muscle fatigue ${round(muscleFatigueScore ?? 0, 1)} and elevated failure rate`,
+        );
       } else if (exceededLastTwo) {
         action = "increase";
         reasons.push("Last 2 sessions exceeded rep range");
@@ -556,6 +858,34 @@ export async function applyTrainingBrain(
         reasons.push(
           `Plateau risk ${round(plateauRisk ?? 0, 1)} detected, increase overload stimulus`,
         );
+      }
+
+      const repeatedExerciseSessions = ctx.sessions.length > 6;
+      let substitutionId = recommendation.exercise_substitution;
+      let effectiveExerciseId = recommendation.exercise_id;
+      const rotationRequired =
+        plateauHigh && highMuscleFatigue && repeatedExerciseSessions;
+      const substitutionRequested =
+        recommendation.progression_action === "substitute" ||
+        rotationRequired ||
+        (overtrainingHigh && recommendation.recommended_reps.max <= 6) ||
+        veryHighMuscleFatigue;
+      if (substitutionRequested) {
+        const rotationCandidate = selectRotationCandidate({
+          recommendation,
+          planExercise,
+          currentExercise: catalogExercise,
+          exerciseCatalog: exerciseCatalogRows,
+          injuredExerciseIds: activeInjuryExerciseIds,
+          recentlyUsedExerciseIds,
+        });
+        if (rotationCandidate && rotationCandidate.id !== recommendation.exercise_id) {
+          substitutionId = rotationCandidate.id;
+          effectiveExerciseId = rotationCandidate.id;
+          reasons.push(
+            `Exercise rotation applied: ${catalogExercise?.name ?? "Current exercise"} -> ${rotationCandidate.name}`,
+          );
+        }
       }
 
       const progressionModifier = clamp(
@@ -641,6 +971,55 @@ export async function applyTrainingBrain(
         reasons.push("Plateau mitigation: increased volume/intensity stimulus");
       }
 
+      if (muscleGroup) {
+        const currentWeeklySets = weeklySetsByMuscle.get(muscleGroup) ?? 0;
+        if (
+          (action === "increase" || plateauHigh) &&
+          currentWeeklySets < volumeRange.min &&
+          !readinessBelow40
+        ) {
+          nextSets = Math.min(12, nextSets + 1);
+          reasons.push(
+            `Adaptive volume scaling: ${muscleGroup} weekly sets below ${volumeRange.min}`,
+          );
+        } else if (
+          currentWeeklySets > volumeRange.max ||
+          (readinessBelow40 && action !== "increase")
+        ) {
+          nextSets = Math.max(1, nextSets - 1);
+          reasons.push(
+            `Adaptive volume scaling: ${muscleGroup} weekly sets above recovery capacity`,
+          );
+        }
+      }
+
+      if (highMuscleFatigue) {
+        nextSets = Math.max(1, nextSets - 1);
+        nextRestSeconds = Math.min(360, nextRestSeconds + 30);
+        reasons.push(
+          `Muscle fatigue ${round(muscleFatigueScore ?? 0, 1)} is high, reducing local load`,
+        );
+      }
+      if (veryHighMuscleFatigue && nextWeight !== null) {
+        nextWeight = round(nextWeight * 0.9, 2);
+        reasons.push("Very high local muscle fatigue, intensity reduced by 10%");
+      }
+
+      if (autoDeloadActive) {
+        action = "deload";
+        nextSets = Math.max(1, Math.floor(nextSets * 0.65));
+        if (nextWeight !== null) {
+          nextWeight = round(nextWeight * 0.88, 2);
+        }
+        const repMin = Math.max(5, Math.min(nextReps.min, 8));
+        const repMax = Math.max(repMin, Math.min(nextReps.max, 12));
+        nextReps = { min: repMin, max: repMax };
+        nextRestSeconds = Math.min(420, nextRestSeconds + 45);
+        reasons.push(
+          "Auto deload week active (ACWR/readiness/fatigue conditions), reducing volume and intensity",
+        );
+      }
+
       let nextAction =
         recommendation.progression_action === "substitute"
           ? recommendation.progression_action
@@ -652,9 +1031,17 @@ export async function applyTrainingBrain(
       ) {
         nextAction = "substitute";
       }
+      if (substitutionId && recommendation.progression_action !== "deload") {
+        nextAction = "substitute";
+      }
+      if (autoDeloadActive && nextAction !== "substitute") {
+        nextAction = "deload";
+      }
 
       return {
         ...recommendation,
+        exercise_id: effectiveExerciseId,
+        exercise_substitution: substitutionId ?? null,
         progression_action: nextAction,
         recommended_sets: nextSets,
         recommended_reps: nextReps,

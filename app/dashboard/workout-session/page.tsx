@@ -29,6 +29,7 @@ type SessionExercise = {
   workout_log_exercise_id: string;
   exercise_name: string;
   muscle_group: string;
+  superset_group: string | null;
   exercise_order: number;
   recommended_sets: number;
   recommended_reps: { min: number; max: number };
@@ -289,6 +290,10 @@ export default function WorkoutSessionPage() {
           workout_log_exercise_id: String(row.workout_log_exercise_id ?? ""),
           exercise_name: String(row.exercise_name ?? "Exercise"),
           muscle_group: String(row.muscle_group ?? ""),
+          superset_group:
+            typeof row.superset_group === "string" && row.superset_group.trim().length > 0
+              ? row.superset_group.trim().toUpperCase()
+              : null,
           exercise_order: Math.max(1, Math.floor(toNumber(row.exercise_order, 1))),
           recommended_sets: Math.max(1, Math.floor(toNumber(row.recommended_sets, 1))),
           recommended_reps: {
@@ -967,6 +972,11 @@ export default function WorkoutSessionPage() {
                   : `${exercise.recommended_weight} kg`}{" "}
                 | Rest: {exercise.rest_seconds}s
               </p>
+              {exercise.superset_group ? (
+                <p className="mt-1 text-[11px] font-medium text-day-text-secondary dark:text-night-text-secondary">
+                  Superset Group: {exercise.superset_group}
+                </p>
+              ) : null}
             </div>
             <div className="flex items-center gap-2">
               <Badge className={actionBadgeClass[exercise.progression_action]} variant="ghost">

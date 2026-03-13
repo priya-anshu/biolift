@@ -1,14 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
+import { apiErrorResponse } from "@/lib/server/api";
 import { getWorkoutPlannerApiContext } from "@/lib/workout-planner/apiContext";
 import {
   getDashboardSummary,
   getWorkoutRecommendations,
   isNoWorkoutPlanError,
 } from "@/lib/workout-planner/service";
-import {
-  checkRecommendationCacheTTL,
-  enqueueAiJob,
-} from "@/lib/workout-planner/workerQueue";
+import { scheduleAiJob } from "@/lib/workout-planner/workerQueue";
 
 function parseDays(value: string | null) {
   if (!value) return 7;
@@ -139,23 +137,15 @@ export async function GET(request: NextRequest) {
           >
         >
       | null = null;
-    let ttl: Awaited<ReturnType<typeof checkRecommendationCacheTTL>> | null = null;
     let requiresPlan = false;
     try {
-      [recommendationRead, ttl] = await Promise.all([
-        getWorkoutRecommendations(
-          { client: api.client, profileId: api.current.profileId },
-          {
-            workoutDate,
-            lookbackDays,
-          },
-        ),
-        checkRecommendationCacheTTL(api.client, {
-          userId: api.current.profileId,
+      recommendationRead = await getWorkoutRecommendations(
+        { client: api.client, profileId: api.current.profileId },
+        {
           workoutDate,
           lookbackDays,
-        }),
-      ]);
+        },
+      );
     } catch (recommendationError) {
       if (isNoWorkoutPlanError(recommendationError)) {
         requiresPlan = true;
@@ -164,11 +154,13 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    if (recommendationRead && ttl) {
+    if (recommendationRead) {
       const shouldEnqueue =
-        recommendationRead.cacheState !== "exact" || (ttl.exists && ttl.isStale);
+        recommendationRead.cacheState !== "exact" || recommendationRead.cacheTtl.isStale;
       if (shouldEnqueue) {
-        void enqueueAiJob(api.adminClient, {
+        await scheduleAiJob(api.adminClient, {
+          scope: "dashboard.summary.refresh",
+          swallowErrors: true,
           userId: api.current.profileId,
           jobType: "recommendation_refresh",
           payload: {
@@ -179,7 +171,7 @@ export async function GET(request: NextRequest) {
             workoutDate,
             lookbackDays,
           }),
-        }).catch(() => {});
+        });
       }
     }
 
@@ -252,7 +244,7 @@ export async function GET(request: NextRequest) {
       todayWorkout: {
         workoutDate,
         cacheState: recommendationRead?.cacheState ?? "baseline",
-        cacheTtl: ttl,
+        cacheTtl: recommendationRead?.cacheTtl ?? null,
         planId: recommendationRead?.recommendations.plan_id ?? null,
         readinessBand: recommendationRead?.recommendations.readiness_band ?? "yellow",
         readinessScore: recommendationRead?.recommendations.readiness_score ?? null,
@@ -285,14 +277,8 @@ export async function GET(request: NextRequest) {
       trainingStats,
     });
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Failed to load dashboard summary";
-    const status =
-      message === "Unauthorized"
-        ? 401
-        : message === "Rate limit exceeded"
-          ? 429
-          : 400;
-    return NextResponse.json({ error: message }, { status });
+    return apiErrorResponse(error, "Failed to load dashboard summary", {
+      scope: "dashboard.summary",
+    });
   }
 }

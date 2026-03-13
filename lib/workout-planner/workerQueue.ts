@@ -10,6 +10,7 @@ import {
   getTrainingLoadState,
   recomputeTrainingLoadState,
 } from "@/lib/workout-planner/trainingLoadEngine";
+import { recomputeMuscleFatigueState } from "@/lib/workout-planner/muscleFatigueEngine";
 
 export type AiJobType =
   | "session_finished"
@@ -45,6 +46,10 @@ type EnqueueJobInput = {
   priority?: number;
 };
 
+type EnqueueJobResult =
+  | { enqueued: true }
+  | { enqueued: false; reason: "duplicate" | "error" };
+
 type ProcessOptions = {
   limit?: number;
   workerId?: string;
@@ -54,6 +59,21 @@ type ProcessSummary = {
   claimed: number;
   completed: number;
   failed: number;
+};
+
+type ImmediateAiJobType =
+  | "session_finished"
+  | "manual_workout_logged"
+  | "plan_updated"
+  | "recovery_updated"
+  | "recommendation_refresh"
+  | "on_demand_refresh";
+
+type ImmediateAiJobInput = {
+  client: SupabaseClient;
+  userId: string;
+  jobType: ImmediateAiJobType;
+  payload?: Record<string, unknown>;
 };
 
 const DEFAULT_LOOKBACK_DAYS = 42;
@@ -75,6 +95,15 @@ function toNumber(value: unknown, fallback = 0) {
 
 function clampInt(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, Math.floor(value)));
+}
+
+function chunk<T>(items: T[], size: number) {
+  if (items.length <= size) return [items];
+  const out: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    out.push(items.slice(index, index + size));
+  }
+  return out;
 }
 
 function priorityForJobType(jobType: AiJobType) {
@@ -197,6 +226,7 @@ async function resolvePlanIdForCacheCheck(
   return String(fallbackPlanRes.data.id);
 }
 
+// LEGACY: routes now consume cache TTL metadata directly from getWorkoutRecommendations.
 export async function checkRecommendationCacheTTL(
   client: SupabaseClient,
   input: {
@@ -273,7 +303,7 @@ export async function checkRecommendationCacheTTL(
 export async function enqueueAiJob(
   client: SupabaseClient,
   input: EnqueueJobInput,
-) {
+): Promise<EnqueueJobResult> {
   const priority = clampInt(
     input.priority ?? priorityForJobType(input.jobType),
     1,
@@ -313,6 +343,53 @@ export async function enqueueAiJob(
   return { enqueued: true as const };
 }
 
+export async function scheduleAiJob(
+  client: SupabaseClient,
+  input: EnqueueJobInput & {
+    scope: string;
+    swallowErrors?: boolean;
+  },
+): Promise<EnqueueJobResult> {
+  const startedAtMs = Date.now();
+
+  try {
+    const result = await enqueueAiJob(client, input);
+    logger.info({
+      scope: input.scope,
+      message: result.enqueued ? "AI job scheduled" : "AI job deduped",
+      meta: {
+        user_id: input.userId,
+        job_type: input.jobType,
+        duration_ms: Date.now() - startedAtMs,
+        dedupe_key: input.dedupeKey ?? null,
+        status: result.enqueued ? "scheduled" : "deduped",
+      },
+    });
+    return result;
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Unknown AI job scheduling error";
+    logger.warn({
+      scope: input.scope,
+      message: "AI job scheduling failed",
+      meta: {
+        user_id: input.userId,
+        job_type: input.jobType,
+        duration_ms: Date.now() - startedAtMs,
+        dedupe_key: input.dedupeKey ?? null,
+        status: "schedule_failed",
+        error: message,
+      },
+    });
+
+    if (input.swallowErrors) {
+      return { enqueued: false, reason: "error" };
+    }
+
+    throw error;
+  }
+}
+
 export async function enqueueDailyRefreshForActiveUsers(
   client: SupabaseClient,
   input?: { workoutDate?: string },
@@ -342,15 +419,21 @@ export async function enqueueDailyRefreshForActiveUsers(
 
   let enqueued = 0;
   let deduped = 0;
-  for (const userId of userIds) {
-    const result = await enqueueAiJob(client, {
-      userId,
-      jobType: "daily_refresh",
-      payload: { workoutDate, lookbackDays: DEFAULT_LOOKBACK_DAYS },
-      dedupeKey: `daily_refresh:${userId}:${workoutDate}`,
+  for (const userIdChunk of chunk(userIds, 100)) {
+    const results = await Promise.all(
+      userIdChunk.map((userId) =>
+        enqueueAiJob(client, {
+          userId,
+          jobType: "daily_refresh",
+          payload: { workoutDate, lookbackDays: DEFAULT_LOOKBACK_DAYS },
+          dedupeKey: `daily_refresh:${userId}:${workoutDate}`,
+        }),
+      ),
+    );
+    results.forEach((result) => {
+      if (result.enqueued) enqueued += 1;
+      else deduped += 1;
     });
-    if (result.enqueued) enqueued += 1;
-    else deduped += 1;
   }
 
   return {
@@ -680,16 +763,96 @@ async function refreshExerciseVolumeStatsSnapshot(
   if (insertRes.error) throw new Error(insertRes.error.message);
 }
 
-async function processJob(client: SupabaseClient, job: QueueJobRow) {
-  const payload = (job.payload ?? {}) as Record<string, unknown>;
+async function runPrimaryAiPipeline(
+  client: SupabaseClient,
+  input: {
+    userId: string;
+    jobType: AiJobType;
+    payload?: Record<string, unknown>;
+  },
+) {
+  const payload = (input.payload ?? {}) as Record<string, unknown>;
   const recommendationInput = extractRecommendationInput(payload);
-  const profileContext = { client, profileId: job.user_id };
+  const profileContext = { client, profileId: input.userId };
+  const cacheRefreshStartedAt = Date.now();
   const workoutLogId =
     typeof payload.workoutLogId === "string" && payload.workoutLogId.trim().length > 0
       ? payload.workoutLogId.trim()
       : undefined;
 
+  if (
+    input.jobType === "session_finished" ||
+    input.jobType === "manual_workout_logged"
+  ) {
+    await updateExerciseAdaptationState(profileContext, {
+      workoutDate: recommendationInput.workoutDate,
+      workoutLogId,
+    });
+  }
+
+  if (
+    input.jobType === "session_finished" ||
+    input.jobType === "manual_workout_logged" ||
+    input.jobType === "recovery_updated"
+  ) {
+    await recomputeRecoveryState(profileContext, {
+      referenceDate: recommendationInput.workoutDate,
+    });
+  }
+
+  if (
+    input.jobType === "session_finished" ||
+    input.jobType === "manual_workout_logged" ||
+    input.jobType === "daily_refresh"
+  ) {
+    await recomputeTrainingLoadState(profileContext, {
+      referenceDate: recommendationInput.workoutDate,
+    });
+    await recomputeMuscleFatigueState(profileContext, {
+      referenceDate: recommendationInput.workoutDate,
+    });
+  }
+
+  await primeWorkoutRecommendationCache(profileContext, recommendationInput);
+  logger.info({
+    scope: "ai-worker.cache-refresh",
+    message: "Workout recommendation cache refreshed",
+    meta: {
+      user_id: input.userId,
+      job_type: input.jobType,
+      duration_ms: Date.now() - cacheRefreshStartedAt,
+      workout_date: recommendationInput.workoutDate,
+      plan_id: recommendationInput.planId ?? null,
+    },
+  });
+
+  return recommendationInput;
+}
+
+// LEGACY: retained for local debugging, but production routes should only enqueue jobs.
+export async function runImmediateAIJobs(input: ImmediateAiJobInput) {
+  logger.info({
+    scope: "ai-worker.immediate",
+    message: "[worker] hobby-mode immediate AI execution",
+    meta: {
+      user_id: input.userId,
+      job_type: input.jobType,
+    },
+  });
+
+  await runPrimaryAiPipeline(input.client, {
+    userId: input.userId,
+    jobType: input.jobType,
+    payload: input.payload,
+  });
+}
+
+async function processJob(client: SupabaseClient, job: QueueJobRow) {
+  const payload = (job.payload ?? {}) as Record<string, unknown>;
+  const profileContext = { client, profileId: job.user_id };
+
   if (job.job_type === "analytics_snapshot") {
+    const recommendationInput = extractRecommendationInput(payload);
     const workoutDate = recommendationInput.workoutDate;
     await Promise.all([
       refreshUserTrainingStatsSnapshot(client, job.user_id, workoutDate),
@@ -702,37 +865,11 @@ async function processJob(client: SupabaseClient, job: QueueJobRow) {
     return;
   }
 
-  if (
-    job.job_type === "session_finished" ||
-    job.job_type === "manual_workout_logged"
-  ) {
-    await updateExerciseAdaptationState(profileContext, {
-      workoutDate: recommendationInput.workoutDate,
-      workoutLogId,
-    });
-  }
-
-  if (
-    job.job_type === "session_finished" ||
-    job.job_type === "manual_workout_logged" ||
-    job.job_type === "recovery_updated"
-  ) {
-    await recomputeRecoveryState(profileContext, {
-      referenceDate: recommendationInput.workoutDate,
-    });
-  }
-
-  if (
-    job.job_type === "session_finished" ||
-    job.job_type === "manual_workout_logged" ||
-    job.job_type === "daily_refresh"
-  ) {
-    await recomputeTrainingLoadState(profileContext, {
-      referenceDate: recommendationInput.workoutDate,
-    });
-  }
-
-  await primeWorkoutRecommendationCache(profileContext, recommendationInput);
+  const recommendationInput = await runPrimaryAiPipeline(client, {
+    userId: job.user_id,
+    jobType: job.job_type,
+    payload,
+  });
 
   if (
     job.job_type === "on_demand_refresh" ||
@@ -755,6 +892,7 @@ export async function processAiJobQueue(
   client: SupabaseClient,
   options?: ProcessOptions,
 ): Promise<ProcessSummary> {
+  const batchStartedAtMs = Date.now();
   const input: Required<ProcessOptions> = {
     limit: clampInt(options?.limit ?? DEFAULT_BATCH_LIMIT, 1, 200),
     workerId: options?.workerId ?? "api-worker",
@@ -826,9 +964,23 @@ export async function processAiJobQueue(
     }
   }
 
-  return {
+  const summary = {
     claimed: claimedJobs.length,
     completed,
     failed,
   };
+  logger.info({
+    scope: "ai-worker.batch",
+    message: "AI queue batch processed",
+      meta: {
+        user_id: null,
+        job_type: "batch",
+        duration_ms: Date.now() - batchStartedAtMs,
+        worker_id: input.workerId,
+        claimed: summary.claimed,
+        completed: summary.completed,
+      failed: summary.failed,
+    },
+  });
+  return summary;
 }

@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
+import { apiErrorResponse } from "@/lib/server/api";
 import { getWorkoutPlannerApiContext } from "@/lib/workout-planner/apiContext";
 import { getMotivationSnapshot } from "@/lib/workout-planner/service";
 
+// LEGACY: retained for backward compatibility; the main dashboard now inlines motivation data.
 export async function GET() {
   try {
     const api = await getWorkoutPlannerApiContext({
@@ -15,14 +17,8 @@ export async function GET() {
     );
     return NextResponse.json(data);
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Failed to load motivation card";
-    const status =
-      message === "Unauthorized"
-        ? 401
-        : message === "Rate limit exceeded"
-          ? 429
-          : 400;
-    return NextResponse.json({ error: message }, { status });
+    return apiErrorResponse(error, "Failed to load motivation card", {
+      scope: "dashboard.motivation",
+    });
   }
 }

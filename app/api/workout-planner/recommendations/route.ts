@@ -1,13 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
+import { apiErrorResponse } from "@/lib/server/api";
 import { getWorkoutPlannerApiContext } from "@/lib/workout-planner/apiContext";
 import {
   getWorkoutRecommendations,
   isNoWorkoutPlanError,
 } from "@/lib/workout-planner/service";
-import {
-  checkRecommendationCacheTTL,
-  enqueueAiJob,
-} from "@/lib/workout-planner/workerQueue";
+import { scheduleAiJob } from "@/lib/workout-planner/workerQueue";
 
 function todayUtcDateKey() {
   return new Date().toISOString().slice(0, 10);
@@ -75,17 +73,6 @@ function parseRequestInput(input: {
   };
 }
 
-function toErrorResponse(error: unknown, fallback: string) {
-  const message = error instanceof Error ? error.message : fallback;
-  const status =
-    message === "Unauthorized"
-      ? 401
-      : message === "Rate limit exceeded"
-        ? 429
-        : 400;
-  return NextResponse.json({ error: message }, { status });
-}
-
 function buildDedupeKey(
   profileId: string,
   input: {
@@ -138,32 +125,29 @@ export async function GET(request: NextRequest) {
       throw error;
     }
 
-    const ttl = await checkRecommendationCacheTTL(api.client, {
-      userId: api.current.profileId,
-      workoutDate: parsed.workoutDate,
-      planId: parsed.planId,
-      dayIndex: parsed.dayIndex,
-      lookbackDays: parsed.lookbackDays,
-    });
     const shouldEnqueue =
-      recommendationRead.cacheState !== "exact" || (ttl.exists && ttl.isStale);
+      recommendationRead.cacheState !== "exact" || recommendationRead.cacheTtl.isStale;
 
     if (shouldEnqueue) {
-      void enqueueAiJob(api.adminClient, {
+      await scheduleAiJob(api.adminClient, {
+        scope: "workout-planner.recommendations.get",
+        swallowErrors: true,
         userId: api.current.profileId,
         jobType: "recommendation_refresh",
         payload: parsed,
         dedupeKey: buildDedupeKey(api.current.profileId, parsed),
-      }).catch(() => {});
+      });
     }
 
     return NextResponse.json({
       recommendations: recommendationRead.recommendations,
       cacheState: recommendationRead.cacheState,
-      cacheTtl: ttl,
+      cacheTtl: recommendationRead.cacheTtl,
     });
   } catch (error) {
-    return toErrorResponse(error, "Failed to generate recommendations");
+    return apiErrorResponse(error, "Failed to generate recommendations", {
+      scope: "workout-planner.recommendations.get",
+    });
   }
 }
 
@@ -202,31 +186,28 @@ export async function POST(request: NextRequest) {
       throw error;
     }
 
-    const ttl = await checkRecommendationCacheTTL(api.client, {
-      userId: api.current.profileId,
-      workoutDate: parsed.workoutDate,
-      planId: parsed.planId,
-      dayIndex: parsed.dayIndex,
-      lookbackDays: parsed.lookbackDays,
-    });
     const shouldEnqueue =
-      recommendationRead.cacheState !== "exact" || (ttl.exists && ttl.isStale);
+      recommendationRead.cacheState !== "exact" || recommendationRead.cacheTtl.isStale;
 
     if (shouldEnqueue) {
-      void enqueueAiJob(api.adminClient, {
+      await scheduleAiJob(api.adminClient, {
+        scope: "workout-planner.recommendations.post",
+        swallowErrors: true,
         userId: api.current.profileId,
         jobType: "recommendation_refresh",
         payload: parsed,
         dedupeKey: buildDedupeKey(api.current.profileId, parsed),
-      }).catch(() => {});
+      });
     }
 
     return NextResponse.json({
       recommendations: recommendationRead.recommendations,
       cacheState: recommendationRead.cacheState,
-      cacheTtl: ttl,
+      cacheTtl: recommendationRead.cacheTtl,
     });
   } catch (error) {
-    return toErrorResponse(error, "Failed to generate recommendations");
+    return apiErrorResponse(error, "Failed to generate recommendations", {
+      scope: "workout-planner.recommendations.post",
+    });
   }
 }

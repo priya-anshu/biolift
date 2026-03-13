@@ -1,5 +1,7 @@
 "use client";
 
+// LEGACY: dormant placeholder page. It is not linked from the active dashboard navigation.
+
 import { motion } from "framer-motion";
 import {
   Apple,

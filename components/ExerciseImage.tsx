@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useEffect, useState } from "react";
 import { Dumbbell } from "lucide-react";
 
@@ -44,14 +45,14 @@ export default function ExerciseImage({
     : null;
 
   useEffect(() => {
-    if (isStatic || !animate || !imagePaths) return;
+    if (isStatic || !animate || !directoryName) return;
 
     const interval = setInterval(() => {
       setCurrentImageIndex((prev) => (prev === 0 ? 1 : 0));
     }, animationSpeed);
 
     return () => clearInterval(interval);
-  }, [isStatic, animate, imagePaths, animationSpeed]);
+  }, [isStatic, animate, directoryName, animationSpeed]);
 
   if (!imagePaths) {
     return showFallback ? (
@@ -77,10 +78,13 @@ export default function ExerciseImage({
       ) : null}
 
       {!imageError && currentImagePath ? (
-        <img
+        <Image
           src={currentImagePath}
           alt={`${exerciseName}${isStatic ? "" : ` - Position ${currentImageIndex + 1}`}`}
-          className={`h-full w-full object-cover transition-opacity duration-500 ${
+          fill
+          unoptimized
+          sizes="100vw"
+          className={`object-cover transition-opacity duration-500 ${
             imageLoading ? "opacity-0" : "opacity-100"
           }`}
           onLoad={() => setImageLoading(false)}

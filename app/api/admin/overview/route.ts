@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { apiErrorResponse } from "@/lib/server/api";
 import {
   AdminAuthError,
   dedupeProfilesByEmail,
@@ -115,12 +116,10 @@ export async function GET() {
       recentRequests,
     });
   } catch (error) {
-    if (error instanceof AdminAuthError) {
-      return NextResponse.json({ error: error.message }, { status: error.status });
-    }
-    return NextResponse.json(
-      { error: "Unable to load admin overview." },
-      { status: 500 },
+    return apiErrorResponse(
+      error instanceof AdminAuthError ? new Error(error.message) : error,
+      "Unable to load admin overview.",
+      { scope: "admin.overview" },
     );
   }
 }

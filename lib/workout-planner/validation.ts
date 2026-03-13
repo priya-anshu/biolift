@@ -89,6 +89,11 @@ function parseExercise(input: unknown, index: number): PlanExerciseInput {
     : "intermediate";
   const rpe = Math.max(1, Math.min(10, toNumber(source.rpe, 7)));
   const tempo = sanitizeText(source.tempo, "2-0-2");
+  const supersetGroupRaw = sanitizeText(source.supersetGroup).toUpperCase();
+  const supersetGroup =
+    supersetGroupRaw.length > 0
+      ? supersetGroupRaw.replace(/[^A-Z0-9_-]/g, "").slice(0, 8)
+      : null;
 
   return {
     dayIndex,
@@ -103,6 +108,7 @@ function parseExercise(input: unknown, index: number): PlanExerciseInput {
     tempo,
     rpe,
     notes: sanitizeText(source.notes),
+    supersetGroup,
     difficultyLevel,
     equipmentRequired: sanitizeTextArray(source.equipmentRequired),
     cloudinaryImageId: sanitizeText(source.cloudinaryImageId) || null,
@@ -171,6 +177,20 @@ export function validateManualPlanRequest(payload: unknown): ManualPlanRequest {
     notes: sanitizeText(source.notes),
     exercises,
   };
+}
+
+export function validatePlanExercisesPatch(payload: unknown): PlanExerciseInput[] {
+  if (!payload || typeof payload !== "object") {
+    throw new Error("Payload must be an object");
+  }
+  const source = payload as Record<string, unknown>;
+  if (!Array.isArray(source.exercises)) {
+    throw new Error("exercises must be an array");
+  }
+  if (source.exercises.length === 0) {
+    throw new Error("exercises cannot be empty");
+  }
+  return source.exercises.map((item, index) => parseExercise(item, index));
 }
 
 export function validateWorkoutLogRequest(payload: unknown): WorkoutLogRequest {

@@ -1,14 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
+import { apiErrorResponse } from "@/lib/server/api";
 import { getWorkoutPlannerApiContext } from "@/lib/workout-planner/apiContext";
 import {
   getWorkoutRecommendations,
   isNoWorkoutPlanError,
 } from "@/lib/workout-planner/service";
 import type { ExerciseRecommendation } from "@/lib/workout-planner/intelligenceEngine";
-import {
-  checkRecommendationCacheTTL,
-  enqueueAiJob,
-} from "@/lib/workout-planner/workerQueue";
+import { scheduleAiJob } from "@/lib/workout-planner/workerQueue";
 
 function todayUtcDateKey() {
   return new Date().toISOString().slice(0, 10);
@@ -74,17 +72,6 @@ function parseRequestInput(input: {
     dayIndex,
     lookbackDays,
   };
-}
-
-function toErrorResponse(error: unknown, fallback: string) {
-  const message = error instanceof Error ? error.message : fallback;
-  const status =
-    message === "Unauthorized"
-      ? 401
-      : message === "Rate limit exceeded"
-        ? 429
-        : 400;
-  return NextResponse.json({ error: message }, { status });
 }
 
 function toActionLabel(action: ExerciseRecommendation["progression_action"]) {
@@ -156,7 +143,6 @@ export async function GET(request: NextRequest) {
 
     let recommendationRead: Awaited<ReturnType<typeof getWorkoutRecommendations>> | null =
       null;
-    let ttl: Awaited<ReturnType<typeof checkRecommendationCacheTTL>> | null = null;
     let requiresPlan = false;
     try {
       recommendationRead = await getWorkoutRecommendations(
@@ -164,23 +150,18 @@ export async function GET(request: NextRequest) {
         parsed,
       );
 
-      ttl = await checkRecommendationCacheTTL(api.client, {
-        userId: api.current.profileId,
-        workoutDate: parsed.workoutDate,
-        planId: parsed.planId,
-        dayIndex: parsed.dayIndex,
-        lookbackDays: parsed.lookbackDays,
-      });
       const shouldEnqueue =
-        recommendationRead.cacheState !== "exact" || (ttl.exists && ttl.isStale);
+        recommendationRead.cacheState !== "exact" || recommendationRead.cacheTtl.isStale;
 
       if (shouldEnqueue) {
-        void enqueueAiJob(api.adminClient, {
+        await scheduleAiJob(api.adminClient, {
+          scope: "workout.today.refresh",
+          swallowErrors: true,
           userId: api.current.profileId,
           jobType: "recommendation_refresh",
           payload: parsed,
           dedupeKey: buildDedupeKey(api.current.profileId, parsed),
-        }).catch(() => {});
+        });
       }
     } catch (recommendationError) {
       if (!isNoWorkoutPlanError(recommendationError)) {
@@ -319,7 +300,7 @@ export async function GET(request: NextRequest) {
       requiresPlan: false,
       workoutDate: parsed.workoutDate,
       cacheState: recommendationRead!.cacheState,
-      cacheTtl: ttl!,
+      cacheTtl: recommendationRead!.cacheTtl,
       plan: planRes.data ?? null,
       recommendations: recommendationResult,
       previewExercises,
@@ -331,6 +312,8 @@ export async function GET(request: NextRequest) {
       ),
     });
   } catch (error) {
-    return toErrorResponse(error, "Failed to load today's workout");
+    return apiErrorResponse(error, "Failed to load today's workout", {
+      scope: "workout.today",
+    });
   }
 }
