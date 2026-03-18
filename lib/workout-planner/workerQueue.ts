@@ -417,23 +417,41 @@ export async function enqueueDailyRefreshForActiveUsers(
     ),
   );
 
-  let enqueued = 0;
-  let deduped = 0;
-  for (const userIdChunk of chunk(userIds, 100)) {
-    const results = await Promise.all(
-      userIdChunk.map((userId) =>
-        enqueueAiJob(client, {
-          userId,
-          jobType: "daily_refresh",
-          payload: { workoutDate, lookbackDays: DEFAULT_LOOKBACK_DAYS },
-          dedupeKey: `daily_refresh:${userId}:${workoutDate}`,
-        }),
-      ),
-    );
-    results.forEach((result) => {
-      if (result.enqueued) enqueued += 1;
-      else deduped += 1;
+  let enqueued = userIds.length;
+  let deduped = 0; // Handled silently by the DB constraint
+
+  const priority = priorityForJobType("daily_refresh");
+  const runAfter = new Date().toISOString();
+
+  for (const userIdChunk of chunk(userIds, 500)) {
+    const jobs = userIdChunk.map((userId) => ({
+      user_id: userId,
+      job_type: "daily_refresh",
+      payload: { workoutDate, lookbackDays: DEFAULT_LOOKBACK_DAYS },
+      dedupe_key: `daily_refresh:${userId}:${workoutDate}`,
+      status: "pending",
+      run_after: runAfter,
+      priority,
+    }));
+
+    const upsertRes = await client.from("ai_job_queue").upsert(jobs, {
+      onConflict: "dedupe_key",
+      ignoreDuplicates: true,
     });
+
+    if (upsertRes.error) {
+      if (upsertRes.error.code !== "42P10" && upsertRes.error.code !== "23505") {
+        throw new Error(upsertRes.error.message);
+      }
+      
+      // Fallback to insert if upsert fails (e.g. SQLite wrapper limitation)
+      if (upsertRes.error.code === "42P10") {
+        const insertRes = await client.from("ai_job_queue").insert(jobs);
+        if (insertRes.error && insertRes.error.code !== "23505") {
+          throw new Error(insertRes.error.message);
+        }
+      }
+    }
   }
 
   return {

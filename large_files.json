@@ -1,0 +1,122 @@
+[
+  {
+    "path": "c:\\Users\\priya\\Desktop\\biolift\\lib\\workout-planner\\service.ts",
+    "size": 69781
+  },
+  {
+    "path": "c:\\Users\\priya\\Desktop\\biolift\\app\\dashboard\\workout-session\\page.tsx",
+    "size": 46093
+  },
+  {
+    "path": "c:\\Users\\priya\\Desktop\\biolift\\lib\\workout-planner\\trainingBrain.ts",
+    "size": 44991
+  },
+  {
+    "path": "c:\\Users\\priya\\Desktop\\biolift\\app\\dashboard\\profile\\page.tsx",
+    "size": 35944
+  },
+  {
+    "path": "c:\\Users\\priya\\Desktop\\biolift\\app\\api\\workout\\session\\route.ts",
+    "size": 35250
+  },
+  {
+    "path": "c:\\Users\\priya\\Desktop\\biolift\\lib\\workout-planner\\intelligenceEngine.ts",
+    "size": 34720
+  },
+  {
+    "path": "c:\\Users\\priya\\Desktop\\biolift\\lib\\workout-planner\\workerQueue.ts",
+    "size": 28334
+  },
+  {
+    "path": "c:\\Users\\priya\\Desktop\\biolift\\app\\dashboard\\workout-planner\\page.tsx",
+    "size": 27698
+  },
+  {
+    "path": "c:\\Users\\priya\\Desktop\\biolift\\app\\dashboard\\page.tsx",
+    "size": 21807
+  },
+  {
+    "path": "c:\\Users\\priya\\Desktop\\biolift\\app\\dashboard\\ranking\\page.tsx",
+    "size": 21742
+  },
+  {
+    "path": "c:\\Users\\priya\\Desktop\\biolift\\app\\dashboard\\shop\\page.tsx",
+    "size": 18725
+  },
+  {
+    "path": "c:\\Users\\priya\\Desktop\\biolift\\app\\dashboard\\diet\\page.tsx",
+    "size": 17905
+  },
+  {
+    "path": "c:\\Users\\priya\\Desktop\\biolift\\app\\admin\\queue\\page.tsx",
+    "size": 14873
+  },
+  {
+    "path": "c:\\Users\\priya\\Desktop\\biolift\\app\\dashboard\\ui\\DashboardHeader.tsx",
+    "size": 14607
+  },
+  {
+    "path": "c:\\Users\\priya\\Desktop\\biolift\\app\\admin\\dashboard\\page.tsx",
+    "size": 14407
+  },
+  {
+    "path": "c:\\Users\\priya\\Desktop\\biolift\\lib\\workout-planner\\trainingLoadEngine.ts",
+    "size": 14369
+  },
+  {
+    "path": "c:\\Users\\priya\\Desktop\\biolift\\lib\\workout-planner\\muscleFatigueEngine.ts",
+    "size": 14316
+  },
+  {
+    "path": "c:\\Users\\priya\\Desktop\\biolift\\app\\dashboard\\progress\\page.tsx",
+    "size": 13374
+  },
+  {
+    "path": "c:\\Users\\priya\\Desktop\\biolift\\app\\admin\\ui\\AdminShell.tsx",
+    "size": 12953
+  },
+  {
+    "path": "c:\\Users\\priya\\Desktop\\biolift\\app\\dashboard\\social\\page.tsx",
+    "size": 12203
+  },
+  {
+    "path": "c:\\Users\\priya\\Desktop\\biolift\\app\\signup\\page.tsx",
+    "size": 11979
+  },
+  {
+    "path": "c:\\Users\\priya\\Desktop\\biolift\\app\\admin\\users\\page.tsx",
+    "size": 11803
+  },
+  {
+    "path": "c:\\Users\\priya\\Desktop\\biolift\\app\\api\\workout\\today\\route.ts",
+    "size": 10186
+  },
+  {
+    "path": "c:\\Users\\priya\\Desktop\\biolift\\app\\api\\dashboard\\summary\\route.ts",
+    "size": 9777
+  },
+  {
+    "path": "c:\\Users\\priya\\Desktop\\biolift\\app\\api\\profile\\overview\\route.ts",
+    "size": 9269
+  },
+  {
+    "path": "c:\\Users\\priya\\Desktop\\biolift\\lib\\workout-planner\\validation.ts",
+    "size": 8819
+  },
+  {
+    "path": "c:\\Users\\priya\\Desktop\\biolift\\lib\\workout-planner\\recoveryEngine.ts",
+    "size": 8680
+  },
+  {
+    "path": "c:\\Users\\priya\\Desktop\\biolift\\app\\signin\\page.tsx",
+    "size": 8553
+  },
+  {
+    "path": "c:\\Users\\priya\\Desktop\\biolift\\lib\\utils\\workoutUtils.ts",
+    "size": 8381
+  },
+  {
+    "path": "c:\\Users\\priya\\Desktop\\biolift\\lib\\workout-planner\\smartPlanner.ts",
+    "size": 8014
+  }
+]
