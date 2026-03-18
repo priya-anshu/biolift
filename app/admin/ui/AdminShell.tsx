@@ -46,7 +46,7 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
   const router = useRouter();
   const pathname = usePathname();
   const { user, signOut } = useAuth();
-  const { isDarkMode, toggleTheme } = useTheme();
+  const { isDarkMode, isHydrated, toggleTheme } = useTheme();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const [identity, setIdentity] = useState<AdminOverviewIdentity["admin"] | null>(null);
@@ -160,7 +160,15 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
               className="rounded-full border border-day-border p-2 text-day-text-secondary transition hover:bg-day-hover dark:border-night-border dark:text-night-text-secondary dark:hover:bg-night-hover"
               aria-label="Toggle theme"
             >
-              {isDarkMode ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
+              {isHydrated ? (
+                isDarkMode ? (
+                  <Sun className="h-5 w-5" />
+                ) : (
+                  <Moon className="h-5 w-5" />
+                )
+              ) : (
+                <Moon className="h-5 w-5" />
+              )}
             </button>
             <div className="relative">
               <button

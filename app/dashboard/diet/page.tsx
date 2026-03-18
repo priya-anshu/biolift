@@ -1,7 +1,5 @@
 "use client";
 
-// LEGACY: dormant placeholder page. It is not linked from the active dashboard navigation.
-
 import { motion } from "framer-motion";
 import {
   Apple,
@@ -12,14 +10,11 @@ import {
   Plus,
   ShoppingCart,
   Target,
-  Utensils,
 } from "lucide-react";
 import { useMemo, useState } from "react";
-
-const sectionVariants = {
-  hidden: { opacity: 0, y: 16 },
-  visible: { opacity: 1, y: 0 },
-};
+import Card from "@/components/ui/Card";
+import Badge from "@/components/ui/Badge";
+import Button from "@/components/ui/Button";
 
 const mealPlans = [
   {
@@ -87,9 +82,9 @@ const nutritionGoals = {
 
 function getProgressColor(current: number, target: number) {
   const percentage = (current / target) * 100;
-  if (percentage >= 90) return "text-emerald-600 dark:text-emerald-300";
-  if (percentage >= 70) return "text-amber-500 dark:text-amber-300";
-  return "text-rose-500 dark:text-rose-300";
+  if (percentage >= 90) return "text-green-500";
+  if (percentage >= 70) return "text-yellow-500";
+  return "text-red-500";
 }
 
 export default function DietPage() {
@@ -104,263 +99,302 @@ export default function DietPage() {
   );
 
   return (
-    <div className="space-y-6 text-day-text-primary dark:text-night-text-primary">
-      <motion.section
-        variants={sectionVariants}
-        initial="hidden"
-        animate="visible"
-        transition={{ duration: 0.4 }}
+    <div className="space-y-6">
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.5 }}
       >
-        <h1 className="text-2xl font-semibold">Nutrition & Diet</h1>
-        <p className="mt-1 text-sm text-day-text-secondary dark:text-night-text-secondary">
-          Smart meal planning to fuel your goals.
+        <h1 className="text-3xl font-bold text-day-text-primary dark:text-night-text-primary mb-2">
+          Nutrition & Diet
+        </h1>
+        <p className="text-day-text-secondary dark:text-night-text-secondary">
+          Smart meal planning for your fitness goals
         </p>
-      </motion.section>
+      </motion.div>
 
-      <motion.section
-        variants={sectionVariants}
-        initial="hidden"
-        animate="visible"
-        transition={{ duration: 0.4, delay: 0.05 }}
-        className="rounded-2xl border border-day-border bg-day-card p-6 shadow-card dark:border-night-border dark:bg-night-card dark:shadow-card-dark"
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.5, delay: 0.1 }}
       >
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-2 text-sm font-semibold">
-            <DollarSign className="h-4 w-4 text-day-accent-primary dark:text-night-accent" />
-            Weekly Budget
+        <Card className="p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-xl font-bold text-day-text-primary dark:text-night-text-primary">
+              Weekly Budget
+            </h2>
+            <DollarSign className="w-6 h-6 text-day-accent-primary dark:text-night-accent" />
           </div>
-          <div className="text-sm text-day-text-secondary dark:text-night-text-secondary">
-            Track your grocery spending for the week.
+          <div className="flex items-center space-x-4">
+            <input
+              type="number"
+              value={budget}
+              onChange={(event) => setBudget(Number(event.target.value))}
+              placeholder="Enter budget"
+              className="input-field flex-1"
+            />
+            <Button variant="primary">Update Budget</Button>
           </div>
-        </div>
-        <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center">
-          <input
-            type="number"
-            value={budget}
-            onChange={(event) => setBudget(Number(event.target.value))}
-            className="w-full rounded-lg border border-day-border bg-day-card px-4 py-2 text-sm text-day-text-primary placeholder-day-text-secondary focus:border-transparent focus:outline-none focus:ring-2 focus:ring-day-accent-primary dark:border-night-border dark:bg-night-card dark:text-night-text-primary dark:placeholder-night-text-secondary dark:focus:ring-night-accent sm:max-w-[200px]"
-          />
-          <button className="rounded-lg bg-day-accent-primary px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:opacity-90 dark:bg-night-accent">
-            Update Budget
-          </button>
-          <div className="text-sm text-day-text-secondary dark:text-night-text-secondary">
-            Planned spend: <span className="font-semibold">${groceryTotal.toFixed(2)}</span>
-          </div>
-        </div>
-      </motion.section>
+        </Card>
+      </motion.div>
 
-      <motion.section
-        variants={sectionVariants}
-        initial="hidden"
-        animate="visible"
-        transition={{ duration: 0.4, delay: 0.1 }}
-        className="rounded-2xl border border-day-border bg-day-card shadow-card dark:border-night-border dark:bg-night-card dark:shadow-card-dark"
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.5, delay: 0.2 }}
       >
-        <div className="flex items-center justify-between border-b border-day-border px-6 py-4 dark:border-night-border">
-          <div>
-            <h2 className="text-lg font-semibold">Recommended Meal Plans</h2>
-            <p className="text-sm text-day-text-secondary dark:text-night-text-secondary">
-              Balanced options tuned for your energy needs.
-            </p>
+        <Card padding="p-0">
+          <div className="p-6 pb-0">
+            <div className="flex items-center justify-between">
+              <h2 className="text-xl font-bold text-day-text-primary dark:text-night-text-primary">
+                Recommended Meal Plans
+              </h2>
+              <Button variant="ghost" size="sm">
+                <Plus className="w-4 h-4 mr-2" />
+                Create Custom
+              </Button>
+            </div>
           </div>
-          <button className="inline-flex items-center gap-2 rounded-lg border border-day-border px-3 py-1 text-sm font-semibold text-day-text-secondary transition hover:bg-day-hover dark:border-night-border dark:text-night-text-secondary dark:hover:bg-night-hover">
-            <Plus className="h-4 w-4" />
-            Create Custom
-          </button>
-        </div>
-        <div className="grid gap-4 p-6 md:grid-cols-3">
-          {mealPlans.map((plan) => (
-            <div
-              key={plan.id}
-              className="rounded-2xl border border-day-border bg-day-card p-5 shadow-card transition hover:-translate-y-1 hover:shadow-lg dark:border-night-border dark:bg-night-card dark:shadow-card-dark"
-            >
-              <div className="flex items-center justify-between text-xs">
-                <span className="rounded-full bg-day-accent-primary px-2 py-1 font-semibold text-white dark:bg-night-accent">
-                  ${plan.cost}
-                </span>
-                <span className="rounded-full bg-day-hover px-2 py-1 font-semibold text-day-text-secondary dark:bg-night-hover dark:text-night-text-secondary">
-                  {plan.duration}
-                </span>
+          <div className="p-6">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              {mealPlans.map((plan) => (
+                <Card key={plan.id} hover className="p-6">
+                  <div className="flex items-center justify-between mb-4">
+                    <Badge variant="primary" size="sm">
+                      ${plan.cost}
+                    </Badge>
+                    <Badge variant="ghost" size="sm">
+                      {plan.duration}
+                    </Badge>
+                  </div>
+
+                  <h3 className="text-lg font-bold text-day-text-primary dark:text-night-text-primary mb-2">
+                    {plan.name}
+                  </h3>
+
+                  <div className="space-y-2 mb-4">
+                    <div className="flex justify-between text-sm">
+                      <span className="text-day-text-secondary dark:text-night-text-secondary">
+                        Calories:
+                      </span>
+                      <span className="font-medium">{plan.calories}</span>
+                    </div>
+                    <div className="flex justify-between text-sm">
+                      <span className="text-day-text-secondary dark:text-night-text-secondary">
+                        Protein:
+                      </span>
+                      <span className="font-medium">{plan.protein}</span>
+                    </div>
+                    <div className="flex justify-between text-sm">
+                      <span className="text-day-text-secondary dark:text-night-text-secondary">
+                        Carbs:
+                      </span>
+                      <span className="font-medium">{plan.carbs}</span>
+                    </div>
+                    <div className="flex justify-between text-sm">
+                      <span className="text-day-text-secondary dark:text-night-text-secondary">
+                        Fat:
+                      </span>
+                      <span className="font-medium">{plan.fat}</span>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2 mb-4">
+                    <h4 className="font-medium text-day-text-primary dark:text-night-text-primary">
+                      Sample Meals:
+                    </h4>
+                    <ul className="text-sm text-day-text-secondary dark:text-night-text-secondary space-y-1">
+                      {plan.meals.slice(0, 3).map((meal) => (
+                        <li key={meal} className="flex items-center">
+                          <CheckCircle className="w-3 h-3 mr-2 text-green-500" />
+                          {meal}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+
+                  <Button variant="primary" fullWidth>
+                    Select Plan
+                  </Button>
+                </Card>
+              ))}
+            </div>
+          </div>
+        </Card>
+      </motion.div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5, delay: 0.3 }}
+        >
+          <Card padding="p-0">
+            <div className="p-6 pb-0">
+              <div className="flex items-center space-x-2">
+                <Target className="w-5 h-5 text-day-accent-primary dark:text-night-accent" />
+                <h2 className="text-xl font-bold text-day-text-primary dark:text-night-text-primary">
+                  Today&apos;s Nutrition
+                </h2>
               </div>
-              <h3 className="mt-4 text-lg font-semibold">{plan.name}</h3>
-              <div className="mt-3 space-y-2 text-sm text-day-text-secondary dark:text-night-text-secondary">
-                <div className="flex items-center justify-between">
-                  <span>Calories</span>
-                  <span className="font-semibold text-day-text-primary dark:text-night-text-primary">
-                    {plan.calories}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span>Protein</span>
-                  <span className="font-semibold text-day-text-primary dark:text-night-text-primary">
-                    {plan.protein}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span>Carbs</span>
-                  <span className="font-semibold text-day-text-primary dark:text-night-text-primary">
-                    {plan.carbs}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span>Fat</span>
-                  <span className="font-semibold text-day-text-primary dark:text-night-text-primary">
-                    {plan.fat}
-                  </span>
-                </div>
-              </div>
-              <div className="mt-4 space-y-2 text-sm text-day-text-secondary dark:text-night-text-secondary">
-                <div className="font-semibold text-day-text-primary dark:text-night-text-primary">
-                  Sample Meals
-                </div>
-                {plan.meals.slice(0, 3).map((meal) => (
-                  <div key={meal} className="flex items-center gap-2">
-                    <CheckCircle className="h-4 w-4 text-emerald-500" />
-                    {meal}
+            </div>
+            <div className="p-6">
+              <div className="space-y-4">
+                {Object.entries(nutritionGoals).map(([nutrient, { current, target }]) => (
+                  <div key={nutrient} className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-medium text-day-text-primary dark:text-night-text-primary capitalize">
+                        {nutrient}
+                      </span>
+                      <span className={`text-sm font-bold ${getProgressColor(current, target)}`}>
+                        {current}/{target}
+                      </span>
+                    </div>
+                    <div className="w-full bg-day-border dark:bg-night-border rounded-full h-2">
+                      <div
+                        className="bg-gradient-to-r from-day-accent-primary to-day-accent-secondary dark:from-night-accent dark:to-red-600 h-2 rounded-full transition-all duration-300"
+                        style={{ width: `${Math.min((current / target) * 100, 100)}%` }}
+                      />
+                    </div>
                   </div>
                 ))}
               </div>
-              <button className="mt-4 w-full rounded-lg bg-day-accent-secondary px-4 py-2 text-sm font-semibold text-white dark:bg-night-accent">
-                Select Plan
-              </button>
             </div>
-          ))}
-        </div>
-      </motion.section>
+          </Card>
+        </motion.div>
 
-      <motion.section
-        variants={sectionVariants}
-        initial="hidden"
-        animate="visible"
-        transition={{ duration: 0.4, delay: 0.15 }}
-        className="grid gap-4 lg:grid-cols-2"
-      >
-        <div className="rounded-2xl border border-day-border bg-day-card p-6 shadow-card dark:border-night-border dark:bg-night-card dark:shadow-card-dark">
-          <div className="flex items-center gap-2 text-sm font-semibold">
-            <Target className="h-4 w-4 text-day-accent-primary dark:text-night-accent" />
-            Today&apos;s Nutrition
-          </div>
-          <div className="mt-4 space-y-4">
-            {Object.entries(nutritionGoals).map(([nutrient, values]) => {
-              const progress = Math.min((values.current / values.target) * 100, 100);
-              return (
-                <div key={nutrient} className="space-y-2 text-sm">
-                  <div className="flex items-center justify-between">
-                    <span className="font-medium capitalize">{nutrient}</span>
-                    <span className={getProgressColor(values.current, values.target)}>
-                      {values.current}/{values.target}
-                    </span>
-                  </div>
-                  <div className="h-2 w-full rounded-full bg-day-border dark:bg-night-border">
-                    <div
-                      className="h-2 rounded-full bg-linear-to-r from-day-accent-primary to-day-accent-secondary dark:from-night-accent dark:to-red-600"
-                      style={{ width: `${progress}%` }}
-                    />
-                  </div>
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5, delay: 0.4 }}
+        >
+          <Card padding="p-0">
+            <div className="p-6 pb-0">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2">
+                  <ShoppingCart className="w-5 h-5 text-day-accent-primary dark:text-night-accent" />
+                  <h2 className="text-xl font-bold text-day-text-primary dark:text-night-text-primary">
+                    Grocery List
+                  </h2>
                 </div>
-              );
-            })}
-          </div>
-        </div>
-
-        <div className="rounded-2xl border border-day-border bg-day-card p-6 shadow-card dark:border-night-border dark:bg-night-card dark:shadow-card-dark">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2 text-sm font-semibold">
-              <ShoppingCart className="h-4 w-4 text-day-accent-primary dark:text-night-accent" />
-              Grocery List
+                <Button variant="ghost" size="sm">
+                  <Plus className="w-4 h-4 mr-2" />
+                  Add Item
+                </Button>
+              </div>
             </div>
-            <button className="inline-flex items-center gap-2 rounded-lg border border-day-border px-3 py-1 text-sm font-semibold text-day-text-secondary transition hover:bg-day-hover dark:border-night-border dark:text-night-text-secondary dark:hover:bg-night-hover">
-              <Plus className="h-4 w-4" />
-              Add Item
-            </button>
-          </div>
-          <div className="mt-4 space-y-3">
-            {groceryList.map((item) => (
-              <div
-                key={item.name}
-                className="flex items-center justify-between rounded-xl border border-day-border px-3 py-2 text-sm text-day-text-secondary transition hover:bg-day-hover dark:border-night-border dark:text-night-text-secondary dark:hover:bg-night-hover"
-              >
-                <div className="flex items-center gap-3">
-                  <input
-                    type="checkbox"
-                    className="h-4 w-4 rounded border-day-border text-day-accent-primary focus:ring-day-accent-primary dark:border-night-border dark:text-night-accent dark:focus:ring-night-accent"
-                  />
-                  <div>
-                    <div className="font-medium text-day-text-primary dark:text-night-text-primary">
-                      {item.name}
+            <div className="p-6">
+              <div className="space-y-3">
+                {groceryList.map((item) => (
+                  <div
+                    key={item.name}
+                    className="flex items-center justify-between p-3 rounded-lg hover:bg-day-hover dark:hover:bg-night-hover transition-colors"
+                  >
+                    <div className="flex items-center space-x-3">
+                      <input
+                        type="checkbox"
+                        className="w-4 h-4 text-day-accent-primary dark:text-night-accent bg-day-card dark:bg-night-card border-day-border dark:border-night-border rounded focus:ring-day-accent-primary dark:focus:ring-night-accent"
+                      />
+                      <div>
+                        <h4 className="font-medium text-day-text-primary dark:text-night-text-primary">
+                          {item.name}
+                        </h4>
+                        <p className="text-sm text-day-text-secondary dark:text-night-text-secondary">
+                          {item.quantity}
+                        </p>
+                      </div>
                     </div>
-                    <div className="text-xs text-day-text-secondary dark:text-night-text-secondary">
-                      {item.quantity}
+                    <div className="text-right">
+                      <div className="font-medium text-day-text-primary dark:text-night-text-primary">
+                        ${item.price}
+                      </div>
+                      <Badge variant="ghost" size="sm">
+                        {item.category}
+                      </Badge>
                     </div>
                   </div>
-                </div>
-                <div className="text-right">
-                  <div className="font-semibold text-day-text-primary dark:text-night-text-primary">
-                    ${item.price}
-                  </div>
-                  <span className="mt-1 inline-flex rounded-full bg-day-hover px-2 py-0.5 text-[11px] font-semibold text-day-text-secondary dark:bg-night-hover dark:text-night-text-secondary">
-                    {item.category}
+                ))}
+              </div>
+
+              <div className="mt-4 pt-4 border-t border-day-border dark:border-night-border">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-day-text-primary dark:text-night-text-primary">
+                    Total:
+                  </span>
+                  <span className="font-bold text-day-accent-primary dark:text-night-accent">
+                    ${groceryTotal.toFixed(2)}
                   </span>
                 </div>
               </div>
-            ))}
-          </div>
-          <div className="mt-4 border-t border-day-border pt-4 text-sm font-semibold text-day-text-primary dark:border-night-border dark:text-night-text-primary">
-            Total:{" "}
-            <span className="text-day-accent-primary dark:text-night-accent">
-              ${groceryTotal.toFixed(2)}
-            </span>
-          </div>
-        </div>
-      </motion.section>
+            </div>
+          </Card>
+        </motion.div>
+      </div>
 
-      <motion.section
-        variants={sectionVariants}
-        initial="hidden"
-        animate="visible"
-        transition={{ duration: 0.4, delay: 0.2 }}
-        className="rounded-2xl border border-day-border bg-day-card p-6 shadow-card dark:border-night-border dark:bg-night-card dark:shadow-card-dark"
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.5, delay: 0.5 }}
       >
-        <div className="flex items-center gap-2 text-sm font-semibold">
-          <Utensils className="h-4 w-4 text-day-accent-primary dark:text-night-accent" />
-          Quick Actions
-        </div>
-        <div className="mt-4 grid gap-4 md:grid-cols-3">
-          <button
-            onClick={() => setShowCalorieCalculator(true)}
-            className="flex h-20 flex-col items-center justify-center gap-2 rounded-xl border border-day-border text-sm font-semibold text-day-text-primary transition hover:bg-day-hover dark:border-night-border dark:text-night-text-primary dark:hover:bg-night-hover"
-          >
-            <Calculator className="h-5 w-5" />
-            Calorie Calculator
-          </button>
-          <button
-            onClick={() => setShowMealSuggestions(true)}
-            className="flex h-20 flex-col items-center justify-center gap-2 rounded-xl border border-day-border text-sm font-semibold text-day-text-primary transition hover:bg-day-hover dark:border-night-border dark:text-night-text-primary dark:hover:bg-night-hover"
-          >
-            <Apple className="h-5 w-5" />
-            Meal Suggestions
-          </button>
-          <button
-            onClick={() => setShowMealPrepGuide(true)}
-            className="flex h-20 flex-col items-center justify-center gap-2 rounded-xl border border-day-border text-sm font-semibold text-day-text-primary transition hover:bg-day-hover dark:border-night-border dark:text-night-text-primary dark:hover:bg-night-hover"
-          >
-            <Clock className="h-5 w-5" />
-            Meal Prep Guide
-          </button>
-        </div>
-      </motion.section>
+        <Card padding="p-0">
+          <div className="p-6 pb-0">
+            <h2 className="text-xl font-bold text-day-text-primary dark:text-night-text-primary">
+              Quick Actions
+            </h2>
+          </div>
+          <div className="p-6">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <Button
+                variant="ghost"
+                className="h-20 flex-col"
+                onClick={() => setShowCalorieCalculator(true)}
+              >
+                <Calculator className="w-6 h-6 mb-2" />
+                <span>Calorie Calculator</span>
+              </Button>
+              <Button
+                variant="ghost"
+                className="h-20 flex-col"
+                onClick={() => setShowMealSuggestions(true)}
+              >
+                <Apple className="w-6 h-6 mb-2" />
+                <span>Meal Suggestions</span>
+              </Button>
+              <Button
+                variant="ghost"
+                className="h-20 flex-col"
+                onClick={() => setShowMealPrepGuide(true)}
+              >
+                <Clock className="w-6 h-6 mb-2" />
+                <span>Meal Prep Guide</span>
+              </Button>
+            </div>
+          </div>
+        </Card>
+      </motion.div>
 
       {(showCalorieCalculator || showMealSuggestions || showMealPrepGuide) && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/50 px-4">
-          <div className="w-full max-w-lg rounded-2xl border border-day-border bg-day-card p-6 shadow-lg dark:border-night-border dark:bg-night-card">
-            <div className="flex items-center justify-between">
-              <h3 className="text-lg font-semibold">
+        <div
+          className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          onClick={() => {
+            setShowCalorieCalculator(false);
+            setShowMealSuggestions(false);
+            setShowMealPrepGuide(false);
+          }}
+        >
+          <div
+            className="w-full max-w-2xl rounded-2xl border border-day-border dark:border-night-border bg-day-card dark:bg-night-card p-6"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-xl font-bold text-day-text-primary dark:text-night-text-primary">
                 {showCalorieCalculator && "Calorie Calculator"}
                 {showMealSuggestions && "Meal Suggestions"}
                 {showMealPrepGuide && "Meal Prep Guide"}
               </h3>
-              <button
-                className="rounded-full border border-day-border px-3 py-1 text-sm text-day-text-secondary dark:border-night-border dark:text-night-text-secondary"
+              <Button
+                variant="ghost"
+                size="sm"
                 onClick={() => {
                   setShowCalorieCalculator(false);
                   setShowMealSuggestions(false);
@@ -368,28 +402,16 @@ export default function DietPage() {
                 }}
               >
                 Close
-              </button>
+              </Button>
             </div>
-            <div className="mt-4 text-sm text-day-text-secondary dark:text-night-text-secondary">
-              {showCalorieCalculator && (
-                <p>
-                  Estimate your daily calories using your activity level and goals.
-                  We’ll add the full calculator widget in the next sprint.
-                </p>
-              )}
-              {showMealSuggestions && (
-                <p>
-                  Get AI-assisted meal ideas tailored to your macros and budget.
-                  Connect this to your nutrition plan to unlock personal recipes.
-                </p>
-              )}
-              {showMealPrepGuide && (
-                <p>
-                  Prep smart: batch proteins, portion carbs, and stock veggies to
-                  hit your targets all week.
-                </p>
-              )}
-            </div>
+            <p className="text-day-text-secondary dark:text-night-text-secondary">
+              {showCalorieCalculator &&
+                "Estimate calories based on your goals and current activity."}
+              {showMealSuggestions &&
+                "Browse meal ideas tailored to your nutrition targets and budget."}
+              {showMealPrepGuide &&
+                "Plan batch cooking, shopping, and meal timing for the week ahead."}
+            </p>
           </div>
         </div>
       )}

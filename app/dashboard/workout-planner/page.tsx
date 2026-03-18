@@ -1,10 +1,31 @@
 "use client";
 
+import Link from "next/link";
+import { AnimatePresence, motion } from "framer-motion";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowDown, ArrowUp, GripVertical, Plus, Search, Sparkles, Wand2 } from "lucide-react";
+import {
+  Activity,
+  ArrowLeft,
+  Brain,
+  CheckCircle,
+  Clock,
+  Dumbbell,
+  Heart,
+  List,
+  PenTool,
+  Play,
+  Plus,
+  Save,
+  Target,
+  Trash2,
+  Zap,
+} from "lucide-react";
+import Badge from "@/components/ui/Badge";
+import Button from "@/components/ui/Button";
 import Card from "@/components/ui/Card";
 
-type Action = "increase" | "maintain" | "reduce" | "deload" | "substitute";
+type PlannerMode = "selection" | "wizard" | "manual" | "defaults";
+
 type Plan = {
   id: string;
   name: string;
@@ -15,6 +36,7 @@ type Plan = {
   planning_mode: "smart" | "manual";
   is_active: boolean;
 };
+
 type PlanExercise = {
   id: string;
   plan_id: string;
@@ -32,437 +54,1191 @@ type PlanExercise = {
   difficulty_level: string;
   equipment_required: string[];
 };
-type ExerciseCatalog = {
-  id: string;
-  name: string;
-  target_muscle: string;
-  difficulty_level: string;
-  equipment_required: string[];
-};
-type TodayResponse = {
-  cacheState: string;
-  plan: { id: string; name: string } | null;
-  previewExercises: Array<{
-    plan_exercise_id: string;
-    exercise_name: string;
-    recommended_sets: number;
-    recommended_reps: { min: number; max: number };
-    recommended_weight: number | null;
-    rest_seconds: number;
-    progression_action: Action;
-    recommendation_reason: string[];
-  }>;
-  error?: string;
+
+type WizardData = {
+  goal: string;
+  fitnessLevel: string;
+  availableDays: string[];
+  workoutDuration: string;
+  focusAreas: string[];
+  experience: string;
+  equipment: string[];
+  timeOfDay: string;
 };
 
-const templates = {
-  strength: { sets: 5, repsMin: 5, repsMax: 5, rest: 180, label: "Strength 5x5" },
-  hypertrophy: { sets: 4, repsMin: 8, repsMax: 12, rest: 90, label: "Hypertrophy 4x8-12" },
-  endurance: { sets: 3, repsMin: 12, repsMax: 15, rest: 60, label: "Endurance 3x12-15" },
-} as const;
+const initialWizardData: WizardData = {
+  goal: "",
+  fitnessLevel: "",
+  availableDays: [],
+  workoutDuration: "",
+  focusAreas: [],
+  experience: "",
+  equipment: [],
+  timeOfDay: "",
+};
+
+const goals = [
+  { id: "weight-loss", label: "Weight Loss", icon: Target, description: "Focus on cardio and calorie burning" },
+  { id: "muscle-gain", label: "Muscle Gain", icon: Dumbbell, description: "Strength training and hypertrophy" },
+  { id: "endurance", label: "Endurance", icon: Heart, description: "Improve cardiovascular fitness" },
+  { id: "flexibility", label: "Flexibility", icon: Activity, description: "Yoga and mobility work" },
+  { id: "general-fitness", label: "General Fitness", icon: Zap, description: "Balanced overall fitness" },
+] as const;
+
+const fitnessLevels = [
+  { id: "beginner", label: "Beginner", description: "New to fitness or returning after a long break" },
+  { id: "intermediate", label: "Intermediate", description: "Regular exercise routine, some experience" },
+  { id: "advanced", label: "Advanced", description: "Consistent training, good form and knowledge" },
+] as const;
+
+const availableDays = [
+  { id: "monday", label: "Monday" },
+  { id: "tuesday", label: "Tuesday" },
+  { id: "wednesday", label: "Wednesday" },
+  { id: "thursday", label: "Thursday" },
+  { id: "friday", label: "Friday" },
+  { id: "saturday", label: "Saturday" },
+  { id: "sunday", label: "Sunday" },
+] as const;
+
+const focusAreas = [
+  { id: "upper-body", label: "Upper Body", icon: Dumbbell },
+  { id: "lower-body", label: "Lower Body", icon: Activity },
+  { id: "core", label: "Core", icon: Target },
+  { id: "cardio", label: "Cardio", icon: Heart },
+  { id: "full-body", label: "Full Body", icon: Zap },
+] as const;
+
+const equipmentOptions = [
+  { id: "bodyweight", label: "Bodyweight Only", description: "No equipment needed" },
+  { id: "dumbbells", label: "Dumbbells", description: "Basic weight training" },
+  { id: "resistance-bands", label: "Resistance Bands", description: "Portable and versatile" },
+  { id: "full-gym", label: "Full Gym Access", description: "All equipment available" },
+] as const;
+
+const timeOfDayOptions = [
+  { id: "morning", label: "Morning", description: "Start your day strong" },
+  { id: "afternoon", label: "Afternoon", description: "Midday energy boost" },
+  { id: "evening", label: "Evening", description: "Unwind after work" },
+] as const;
+
+const experienceOptions = [
+  { id: "new", label: "New to Exercise", description: "Starting my fitness journey" },
+  { id: "some", label: "Some Experience", description: "I've worked out before" },
+  { id: "experienced", label: "Experienced", description: "I know what I'm doing" },
+] as const;
+
+const durationOptions = [
+  { id: "30", label: "30 minutes", description: "Quick and effective" },
+  { id: "45", label: "45 minutes", description: "Balanced workout" },
+  { id: "60", label: "60 minutes", description: "Comprehensive training" },
+] as const;
 
 function nice(text: string) {
-  return text.replaceAll("_", " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  return text.replaceAll("_", " ").replaceAll("-", " ").replace(/\b\w/g, (char) => char.toUpperCase());
 }
-function badge(action: Action) {
-  if (action === "increase") return "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300";
-  if (action === "maintain") return "bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-300";
-  if (action === "reduce") return "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300";
-  if (action === "deload") return "bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300";
-  return "bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300";
-}
-function superset(value: string) {
-  const out = value.trim().toUpperCase().replace(/[^A-Z0-9_-]/g, "");
-  return out.length ? out.slice(0, 8) : null;
-}
+
 function normalize(rows: PlanExercise[]) {
   const sorted = [...rows].sort((a, b) => a.day_index - b.day_index || a.exercise_order - b.exercise_order);
   const perDay = new Map<number, number>();
+
   return sorted.map((row) => {
     const day = Math.max(1, Math.min(7, Math.floor(Number(row.day_index) || 1)));
-    const ord = (perDay.get(day) ?? 0) + 1;
-    perDay.set(day, ord);
+    const order = (perDay.get(day) ?? 0) + 1;
+    perDay.set(day, order);
+
     return {
       ...row,
       day_index: day,
-      exercise_order: ord,
+      exercise_order: order,
       sets: Math.max(1, Math.min(20, Math.floor(Number(row.sets) || 3))),
       reps_min: Math.max(1, Math.min(120, Math.floor(Number(row.reps_min) || 8))),
       reps_max: Math.max(1, Math.min(120, Math.floor(Number(row.reps_max) || 12))),
       rest_seconds: Math.max(15, Math.min(900, Math.floor(Number(row.rest_seconds) || 60))),
-      superset_group: row.superset_group ? superset(row.superset_group) : null,
     };
   });
 }
-function newRow(planId: string, day: number, item: ExerciseCatalog): PlanExercise {
+
+function buildBlankRow(planId: string, dayIndex: number, difficultyLevel: string): PlanExercise {
   return {
     id: `temp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     plan_id: planId,
-    day_index: day,
+    day_index: dayIndex,
     exercise_order: 1,
-    exercise_id: item.id,
-    exercise_name: item.name,
-    muscle_group: item.target_muscle,
+    exercise_id: null,
+    exercise_name: "",
+    muscle_group: "general",
     sets: 3,
-    reps_min: 8,
-    reps_max: 12,
-    rest_seconds: 90,
+    reps_min: 10,
+    reps_max: 10,
+    rest_seconds: 60,
     rpe: 7,
     superset_group: null,
-    difficulty_level: item.difficulty_level || "intermediate",
-    equipment_required: item.equipment_required ?? [],
+    difficulty_level: difficultyLevel || "intermediate",
+    equipment_required: [],
   };
+}
+
+function buildWeeklySchedule(data: WizardData) {
+  const schedule: Array<{ day: string; workout: string }> = [];
+
+  data.availableDays.forEach((day) => {
+    if (data.focusAreas.includes("full-body")) {
+      schedule.push({ day, workout: "Full Body Workout" });
+      return;
+    }
+
+    if (data.focusAreas.includes("upper-body") && data.focusAreas.includes("lower-body")) {
+      const index = schedule.length;
+      schedule.push({ day, workout: index % 2 === 0 ? "Upper Body" : "Lower Body" });
+      return;
+    }
+
+    if (data.focusAreas.includes("cardio")) {
+      schedule.push({ day, workout: "Cardio + Core" });
+      return;
+    }
+
+    schedule.push({ day, workout: "Strength Training" });
+  });
+
+  return schedule;
+}
+
+function mapGoalToApi(goal: string) {
+  const goalMap: Record<string, string> = {
+    "weight-loss": "weight_loss",
+    "muscle-gain": "muscle_gain",
+    endurance: "endurance",
+    flexibility: "flexibility",
+    "general-fitness": "general_fitness",
+  };
+
+  return goalMap[goal] ?? "general_fitness";
+}
+
+function mapEquipmentToApi(equipment: string[]) {
+  const equipmentMap: Record<string, string[]> = {
+    bodyweight: ["bodyweight"],
+    dumbbells: ["dumbbells"],
+    "resistance-bands": ["resistance_bands"],
+    "full-gym": ["barbell", "dumbbells", "machines", "cables"],
+  };
+
+  const preferred = equipment.flatMap((item) => equipmentMap[item] ?? []);
+  return preferred.length > 0 ? Array.from(new Set(preferred)) : ["bodyweight"];
 }
 
 export default function WorkoutPlannerPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [advanced, setAdvanced] = useState(false);
   const [plans, setPlans] = useState<Plan[]>([]);
   const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
-  const [today, setToday] = useState<TodayResponse | null>(null);
-  const [showFull, setShowFull] = useState(false);
-
   const [rows, setRows] = useState<PlanExercise[]>([]);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [dragId, setDragId] = useState<string | null>(null);
 
-  const [query, setQuery] = useState("");
-  const [muscle, setMuscle] = useState("all");
-  const [difficulty, setDifficulty] = useState("all");
-  const [libraryDay, setLibraryDay] = useState(1);
-  const [results, setResults] = useState<ExerciseCatalog[]>([]);
-  const [suggestions, setSuggestions] = useState<ExerciseCatalog[]>([]);
-  const [searching, setSearching] = useState(false);
-
-  const [customName, setCustomName] = useState("");
-  const [customMuscle, setCustomMuscle] = useState("chest");
-  const [creating, setCreating] = useState(false);
+  const [mode, setMode] = useState<PlannerMode>("selection");
+  const [currentStep, setCurrentStep] = useState(1);
+  const [wizardData, setWizardData] = useState<WizardData>(initialWizardData);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [generatedVisible, setGeneratedVisible] = useState(false);
 
   const selectedPlan = useMemo(
-    () => plans.find((p) => p.id === selectedPlanId) ?? plans.find((p) => p.is_active) ?? null,
+    () => plans.find((plan) => plan.id === selectedPlanId) ?? plans.find((plan) => plan.is_active) ?? null,
     [plans, selectedPlanId],
   );
-  const byDay = useMemo(() => {
-    const map = new Map<number, PlanExercise[]>();
-    rows.forEach((row) => {
-      const cur = map.get(row.day_index) ?? [];
-      cur.push(row);
-      map.set(row.day_index, cur);
-    });
-    return Array.from(map.entries()).sort((a, b) => a[0] - b[0]);
-  }, [rows]);
 
-  const loadPlans = useCallback(async () => {
-    const res = await fetch("/api/workout-planner/plans", { cache: "no-store" });
-    const body = (await res.json()) as { plans?: Plan[]; error?: string };
-    if (!res.ok) throw new Error(body.error ?? "Failed to load plans");
+  const exerciseRows = useMemo(() => normalize(rows), [rows]);
+
+  const generatedExercises = useMemo(
+    () => exerciseRows.map((row) => row.exercise_name.trim()).filter((value) => value.length > 0).slice(0, 8),
+    [exerciseRows],
+  );
+
+  const weeklySchedule = useMemo(() => buildWeeklySchedule(wizardData), [wizardData]);
+
+  const loadPlans = useCallback(async (forceActive = false) => {
+    const response = await fetch("/api/workout-planner/plans", { cache: "no-store" });
+    const body = (await response.json()) as { plans?: Plan[]; error?: string };
+    if (!response.ok) throw new Error(body.error ?? "Failed to load plans");
+
     const items = body.plans ?? [];
-    setPlans(items);
-    setSelectedPlanId((cur) => cur && items.some((p) => p.id === cur) ? cur : (items.find((p) => p.is_active)?.id ?? items[0]?.id ?? null));
-  }, []);
+    const nextSelectedId =
+      !forceActive && selectedPlanId && items.some((plan) => plan.id === selectedPlanId)
+        ? selectedPlanId
+        : (items.find((plan) => plan.is_active)?.id ?? items[0]?.id ?? null);
 
-  const loadToday = useCallback(async (planId: string) => {
-    const res = await fetch(`/api/workout/today?planId=${planId}&lookbackDays=42`, { cache: "no-store" });
-    const body = (await res.json()) as TodayResponse;
-    if (!res.ok) throw new Error(body.error ?? "Failed to load workout");
-    setToday(body);
-  }, []);
+    setPlans(items);
+    setSelectedPlanId(nextSelectedId);
+    return nextSelectedId;
+  }, [selectedPlanId]);
 
   const loadPlanDetail = useCallback(async (planId: string) => {
-    const res = await fetch(`/api/workout-planner/plans/${planId}`, { cache: "no-store" });
-    const body = (await res.json()) as { exercises?: PlanExercise[]; error?: string };
-    if (!res.ok) throw new Error(body.error ?? "Failed to load plan detail");
+    const response = await fetch(`/api/workout-planner/plans/${planId}`, { cache: "no-store" });
+    const body = (await response.json()) as { exercises?: PlanExercise[]; error?: string };
+    if (!response.ok) throw new Error(body.error ?? "Failed to load plan detail");
     setRows(normalize(body.exercises ?? []));
     setDirty(false);
   }, []);
 
   useEffect(() => {
     setLoading(true);
-    void loadPlans().catch((e) => setError(e instanceof Error ? e.message : "Failed")).finally(() => setLoading(false));
+    void loadPlans()
+      .catch((loadError) => {
+        setError(loadError instanceof Error ? loadError.message : "Failed to load plans");
+      })
+      .finally(() => setLoading(false));
   }, [loadPlans]);
 
   useEffect(() => {
-    if (!selectedPlanId) return;
-    void Promise.all([loadToday(selectedPlanId), loadPlanDetail(selectedPlanId)]).catch((e) =>
-      setError(e instanceof Error ? e.message : "Failed"),
-    );
-  }, [loadToday, loadPlanDetail, selectedPlanId]);
+    if (!selectedPlanId) {
+      setRows([]);
+      return;
+    }
 
-  const generatePlan = async () => {
-    const res = await fetch("/api/workout-planner/generate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: "AI Smart Program", goal: "hypertrophy", experienceLevel: "intermediate", workoutDaysPerWeek: 4, preferredEquipment: ["barbell", "dumbbells"], visibility: "private" }),
+    void loadPlanDetail(selectedPlanId).catch((loadError) => {
+      setError(loadError instanceof Error ? loadError.message : "Failed to load plan detail");
     });
-    const body = (await res.json()) as { error?: string };
-    if (!res.ok) throw new Error(body.error ?? "Failed to generate");
-    await loadPlans();
-    setNotice("Plan generated.");
+  }, [loadPlanDetail, selectedPlanId]);
+
+  const handleWizardToggle = (
+    field: "availableDays" | "focusAreas" | "equipment",
+    value: string,
+  ) => {
+    setWizardData((current) => {
+      const values = current[field];
+      const nextValues = values.includes(value)
+        ? values.filter((item) => item !== value)
+        : [...values, value];
+
+      return {
+        ...current,
+        [field]: nextValues,
+      };
+    });
   };
 
-  const updateRow = (id: string, fn: (r: PlanExercise) => PlanExercise) => {
-    setRows((cur) => normalize(cur.map((r) => (r.id === id ? fn(r) : r))));
+  const handleWizardValue = (
+    field: Exclude<keyof WizardData, "availableDays" | "focusAreas" | "equipment">,
+    value: string,
+  ) => {
+    setWizardData((current) => ({
+      ...current,
+      [field]: value,
+    }));
+  };
+
+  const canProceed = useMemo(() => {
+    switch (currentStep) {
+      case 1:
+        return Boolean(wizardData.goal && wizardData.fitnessLevel);
+      case 2:
+        return wizardData.availableDays.length > 0 && Boolean(wizardData.workoutDuration);
+      case 3:
+        return wizardData.focusAreas.length > 0 && Boolean(wizardData.experience);
+      case 4:
+        return wizardData.equipment.length > 0 && Boolean(wizardData.timeOfDay);
+      default:
+        return false;
+    }
+  }, [currentStep, wizardData]);
+
+  const nextStep = () => {
+    if (!canProceed) return;
+    setCurrentStep((current) => Math.min(current + 1, 4));
+  };
+
+  const prevStep = () => {
+    setCurrentStep((current) => Math.max(current - 1, 1));
+  };
+
+  const generatePlan = async () => {
+    setIsGenerating(true);
+    setError(null);
+    setNotice(null);
+
+    try {
+      const response = await fetch("/api/workout-planner/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: `${nice(wizardData.goal || "custom")} ${nice(wizardData.fitnessLevel || "plan")} Plan`,
+          goal: mapGoalToApi(wizardData.goal),
+          experienceLevel: wizardData.fitnessLevel || "intermediate",
+          workoutDaysPerWeek: wizardData.availableDays.length || 4,
+          preferredEquipment: mapEquipmentToApi(wizardData.equipment),
+          visibility: "private",
+        }),
+      });
+
+      const body = (await response.json()) as { error?: string };
+      if (!response.ok) throw new Error(body.error ?? "Failed to generate");
+
+      const nextPlanId = await loadPlans(true);
+      if (nextPlanId) {
+        await loadPlanDetail(nextPlanId);
+        setSelectedPlanId(nextPlanId);
+      }
+
+      setGeneratedVisible(true);
+      setNotice("Plan generated.");
+    } catch (generateError) {
+      setError(generateError instanceof Error ? generateError.message : "Failed to generate");
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  const updateExerciseRow = (id: string, updater: (row: PlanExercise) => PlanExercise) => {
+    setRows((current) => normalize(current.map((row) => (row.id === id ? updater(row) : row))));
+    setDirty(true);
+  };
+
+  const addManualExercise = () => {
+    if (!selectedPlanId) return;
+
+    const nextDay = exerciseRows[exerciseRows.length - 1]?.day_index ?? 1;
+    const level = selectedPlan?.experience_level ?? "intermediate";
+    setRows((current) => normalize([...current, buildBlankRow(selectedPlanId, nextDay, level)]));
+    setDirty(true);
+  };
+
+  const removeManualExercise = (id: string) => {
+    setRows((current) => normalize(current.filter((row) => row.id !== id)));
     setDirty(true);
   };
 
   const saveBuilder = async () => {
-    if (!selectedPlanId || rows.length === 0) return;
+    if (!selectedPlanId) return;
+
+    const validRows = normalize(rows).filter((row) => row.exercise_name.trim().length > 0);
+    if (validRows.length === 0) {
+      setError("Add at least one exercise before saving.");
+      return;
+    }
+
     setSaving(true);
+    setError(null);
+    setNotice(null);
+
     try {
-      const exercises = normalize(rows).map((r) => ({ dayIndex: r.day_index, exerciseOrder: r.exercise_order, exerciseId: r.exercise_id, exerciseName: r.exercise_name, muscleGroup: r.muscle_group, sets: r.sets, repsMin: r.reps_min, repsMax: r.reps_max, restSeconds: r.rest_seconds, tempo: "2-0-2", rpe: r.rpe ?? 7, notes: "", supersetGroup: r.superset_group, difficultyLevel: (r.difficulty_level === "beginner" || r.difficulty_level === "advanced") ? r.difficulty_level : "intermediate", equipmentRequired: r.equipment_required, cloudinaryImageId: null, cloudinaryGifId: null, createdBy: "user", visibility: "private" }));
-      const res = await fetch(`/api/workout-planner/plans/${selectedPlanId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ exercises }) });
-      const body = (await res.json()) as { exercises?: PlanExercise[]; error?: string };
-      if (!res.ok) throw new Error(body.error ?? "Failed to save");
+      const exercises = validRows.map((row) => ({
+        dayIndex: row.day_index,
+        exerciseOrder: row.exercise_order,
+        exerciseId: row.exercise_id,
+        exerciseName: row.exercise_name,
+        muscleGroup: row.muscle_group,
+        sets: row.sets,
+        repsMin: row.reps_min,
+        repsMax: row.reps_max,
+        restSeconds: row.rest_seconds,
+        tempo: "2-0-2",
+        rpe: row.rpe ?? 7,
+        notes: "",
+        supersetGroup: row.superset_group,
+        difficultyLevel:
+          row.difficulty_level === "beginner" || row.difficulty_level === "advanced"
+            ? row.difficulty_level
+            : "intermediate",
+        equipmentRequired: row.equipment_required,
+        cloudinaryImageId: null,
+        cloudinaryGifId: null,
+        createdBy: "user",
+        visibility: "private",
+      }));
+
+      const response = await fetch(`/api/workout-planner/plans/${selectedPlanId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ exercises }),
+      });
+
+      const body = (await response.json()) as { exercises?: PlanExercise[]; error?: string };
+      if (!response.ok) throw new Error(body.error ?? "Failed to save");
+
       setRows(normalize(body.exercises ?? []));
       setDirty(false);
       setNotice("Workout builder saved.");
-      await loadToday(selectedPlanId);
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "Failed to save");
     } finally {
       setSaving(false);
     }
   };
 
-  const runSearch = async (mode: "search" | "suggest") => {
-    if (!selectedPlanId && mode === "suggest") return;
-    setSearching(true);
-    try {
-      const params = new URLSearchParams({ limit: "20" });
-      if (query.trim()) params.set("q", query.trim());
-      if (muscle !== "all") params.set("muscle", muscle);
-      if (difficulty !== "all") params.set("difficulty", difficulty);
-      if (mode === "suggest") {
-        params.set("mode", "suggest");
-        params.set("planId", selectedPlanId!);
-        params.set("dayIndex", String(libraryDay));
-      }
-      const res = await fetch(`/api/workout-planner/exercises?${params.toString()}`, { cache: "no-store" });
-      const body = (await res.json()) as { exercises?: ExerciseCatalog[]; suggestions?: ExerciseCatalog[]; error?: string };
-      if (!res.ok) throw new Error(body.error ?? "Search failed");
-      if (mode === "search") setResults(body.exercises ?? []);
-      else setSuggestions(body.suggestions ?? []);
-    } finally {
-      setSearching(false);
-    }
-  };
+  const renderSelectionScreen = () => (
+    <div className="space-y-8">
+      <div className="space-y-2 text-center">
+        <h1 className="text-3xl font-bold text-day-text-primary dark:text-night-text-primary">
+          How do you want to start?
+        </h1>
+        <p className="text-day-text-secondary dark:text-night-text-secondary">
+          Choose the best way to create your workout routine
+        </p>
+      </div>
 
-  const createCustom = async () => {
-    if (!customName.trim()) return;
-    setCreating(true);
-    try {
-      const res = await fetch("/api/workout-planner/exercises", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: customName.trim(), targetMuscle: customMuscle, difficultyLevel: selectedPlan?.experience_level ?? "intermediate", visibility: "private" }) });
-      const body = (await res.json()) as { exercise?: ExerciseCatalog; error?: string };
-      if (!res.ok || !body.exercise) throw new Error(body.error ?? "Create failed");
-      setRows((cur) => normalize([...cur, newRow(selectedPlanId!, libraryDay, body.exercise!)]));
-      setDirty(true);
-      setCustomName("");
-    } finally {
-      setCreating(false);
-    }
-  };
+      <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
+        <Card
+          className="group cursor-pointer p-8 transition-all hover:border-day-accent-primary dark:hover:border-night-accent"
+          onClick={() => {
+            setMode("wizard");
+            setGeneratedVisible(false);
+          }}
+        >
+          <div className="flex flex-col items-center space-y-4 text-center">
+            <div className="rounded-full bg-blue-100 p-4 text-blue-600 transition-transform group-hover:scale-110 dark:bg-blue-900 dark:text-blue-300">
+              <Brain className="h-8 w-8" />
+            </div>
+            <h3 className="text-xl font-bold">AI Assistant</h3>
+            <p className="text-sm text-day-text-secondary dark:text-night-text-secondary">
+              Answer a few questions and let our AI build a perfect personalized schedule for you.
+            </p>
+          </div>
+        </Card>
 
-  const addToPlan = (item: ExerciseCatalog) => {
-    if (!selectedPlanId) return;
-    setRows((cur) => normalize([...cur, newRow(selectedPlanId, libraryDay, item)]));
-    setDirty(true);
-  };
+        <Card
+          className="group cursor-pointer p-8 transition-all hover:border-day-accent-primary dark:hover:border-night-accent"
+          onClick={() => setMode("manual")}
+        >
+          <div className="flex flex-col items-center space-y-4 text-center">
+            <div className="rounded-full bg-purple-100 p-4 text-purple-600 transition-transform group-hover:scale-110 dark:bg-purple-900 dark:text-purple-300">
+              <PenTool className="h-8 w-8" />
+            </div>
+            <h3 className="text-xl font-bold">Manual Builder</h3>
+            <p className="text-sm text-day-text-secondary dark:text-night-text-secondary">
+              Build your own plan from scratch. Choose specific exercises, sets, reps, and duration.
+            </p>
+          </div>
+        </Card>
 
-  const removeRow = (id: string) => {
-    setRows((cur) => normalize(cur.filter((r) => r.id !== id)));
-    setDirty(true);
-  };
+        <Card
+          className="group cursor-pointer p-8 transition-all hover:border-day-accent-primary dark:hover:border-night-accent"
+          onClick={() => setMode("defaults")}
+        >
+          <div className="flex flex-col items-center space-y-4 text-center">
+            <div className="rounded-full bg-green-100 p-4 text-green-600 transition-transform group-hover:scale-110 dark:bg-green-900 dark:text-green-300">
+              <List className="h-8 w-8" />
+            </div>
+            <h3 className="text-xl font-bold">Pre-made Plans</h3>
+            <p className="text-sm text-day-text-secondary dark:text-night-text-secondary">
+              Browse your available workout templates and start immediately.
+            </p>
+          </div>
+        </Card>
+      </div>
+    </div>
+  );
 
-  const moveRow = (id: string, dir: "up" | "down") => {
-    setRows((cur) => {
-      const next = normalize(cur);
-      const idx = next.findIndex((r) => r.id === id);
-      if (idx < 0) return next;
-      const row = next[idx];
-      const inDay = next.map((r, i) => ({ r, i })).filter((x) => x.r.day_index === row.day_index).map((x) => x.i);
-      const pos = inDay.indexOf(idx);
-      const swap = dir === "up" ? inDay[pos - 1] : inDay[pos + 1];
-      if (swap === undefined) return next;
-      [next[idx], next[swap]] = [next[swap], next[idx]];
-      return normalize(next);
-    });
-    setDirty(true);
-  };
+  const renderManualBuilder = () => (
+    <div className="space-y-6">
+      <div className="mb-6 flex items-center space-x-4">
+        <Button variant="ghost" size="sm" onClick={() => setMode("selection")}>
+          <ArrowLeft className="h-5 w-5" />
+        </Button>
+        <div>
+          <h1 className="text-2xl font-bold text-day-text-primary dark:text-night-text-primary">
+            Custom Plan Builder
+          </h1>
+          <p className="text-sm text-day-text-secondary dark:text-night-text-secondary">
+            Define your exercises, reps, and sets.
+          </p>
+        </div>
+      </div>
 
-  const dropOnRow = (targetId: string) => {
-    if (!dragId || dragId === targetId) return;
-    setRows((cur) => {
-      const next = normalize(cur);
-      const from = next.findIndex((r) => r.id === dragId);
-      const to = next.findIndex((r) => r.id === targetId);
-      if (from < 0 || to < 0) return next;
-      const [moved] = next.splice(from, 1);
-      const insertAt = from < to ? to - 1 : to;
-      moved.day_index = next[insertAt]?.day_index ?? moved.day_index;
-      next.splice(insertAt, 0, moved);
-      return normalize(next);
-    });
-    setDirty(true);
-    setDragId(null);
-  };
+      <Card className="space-y-6 p-6">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <div>
+            <label className="mb-1 block text-sm font-medium">Plan Name</label>
+            <input
+              type="text"
+              className="w-full rounded border border-day-border bg-transparent p-2 dark:border-night-border"
+              value={selectedPlan?.name ?? ""}
+              placeholder="Select or create a plan first"
+              readOnly
+            />
+          </div>
+          <div className="flex space-x-2">
+            <div className="flex-1">
+              <label className="mb-1 block text-sm font-medium">Duration</label>
+              <input
+                type="number"
+                className="w-full rounded border border-day-border bg-transparent p-2 dark:border-night-border"
+                value={selectedPlan?.workout_days_per_week ?? 0}
+                readOnly
+              />
+            </div>
+            <div className="flex-1">
+              <label className="mb-1 block text-sm font-medium">Unit</label>
+              <select
+                className="w-full rounded border border-day-border bg-transparent p-2 dark:border-night-border"
+                value="days/week"
+                disabled
+              >
+                <option value="days/week" className="bg-day-bg dark:bg-night-bg">
+                  Days/Week
+                </option>
+              </select>
+            </div>
+          </div>
+        </div>
 
-  const applyTemplate = (id: string, key: keyof typeof templates) => {
-    const t = templates[key];
-    updateRow(id, (r) => ({ ...r, sets: t.sets, reps_min: t.repsMin, reps_max: t.repsMax, rest_seconds: t.rest, rpe: 8 }));
-  };
+        <div className="border-t border-day-border pt-4 dark:border-night-border">
+          <h3 className="mb-4 flex items-center font-semibold">
+            <Dumbbell className="mr-2 h-4 w-4" />
+            Exercises
+          </h3>
+
+          <div className="space-y-4">
+            {exerciseRows.map((exercise) => (
+              <div
+                key={exercise.id}
+                className="flex flex-col items-end gap-3 rounded-lg bg-day-bg p-4 dark:bg-night-bg md:flex-row"
+              >
+                <div className="flex-grow">
+                  <label className="text-xs text-day-text-secondary dark:text-night-text-secondary">
+                    Exercise Name
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Bench Press"
+                    className="w-full rounded border border-day-border bg-transparent p-2 dark:border-night-border"
+                    value={exercise.exercise_name}
+                    onChange={(event) =>
+                      updateExerciseRow(exercise.id, (current) => ({
+                        ...current,
+                        exercise_name: event.target.value,
+                      }))
+                    }
+                  />
+                  <p className="mt-1 text-xs text-day-text-secondary dark:text-night-text-secondary">
+                    Day {exercise.day_index}
+                  </p>
+                </div>
+
+                <div className="w-20">
+                  <label className="text-xs text-day-text-secondary dark:text-night-text-secondary">
+                    Sets
+                  </label>
+                  <input
+                    type="number"
+                    className="w-full rounded border border-day-border bg-transparent p-2 dark:border-night-border"
+                    value={exercise.sets}
+                    onChange={(event) =>
+                      updateExerciseRow(exercise.id, (current) => ({
+                        ...current,
+                        sets: Math.max(1, Number(event.target.value) || 1),
+                      }))
+                    }
+                  />
+                </div>
+
+                <div className="w-20">
+                  <label className="text-xs text-day-text-secondary dark:text-night-text-secondary">
+                    Reps
+                  </label>
+                  <input
+                    type="number"
+                    className="w-full rounded border border-day-border bg-transparent p-2 dark:border-night-border"
+                    value={exercise.reps_max}
+                    onChange={(event) => {
+                      const reps = Math.max(1, Number(event.target.value) || 1);
+                      updateExerciseRow(exercise.id, (current) => ({
+                        ...current,
+                        reps_min: reps,
+                        reps_max: reps,
+                      }));
+                    }}
+                  />
+                </div>
+
+                <div className="w-24">
+                  <label className="text-xs text-day-text-secondary dark:text-night-text-secondary">
+                    Rest (sec)
+                  </label>
+                  <input
+                    type="number"
+                    className="w-full rounded border border-day-border bg-transparent p-2 dark:border-night-border"
+                    value={exercise.rest_seconds}
+                    onChange={(event) =>
+                      updateExerciseRow(exercise.id, (current) => ({
+                        ...current,
+                        rest_seconds: Math.max(15, Number(event.target.value) || 60),
+                      }))
+                    }
+                  />
+                </div>
+
+                <Button
+                  variant="ghost"
+                  className="text-red-500 hover:text-red-700"
+                  onClick={() => removeManualExercise(exercise.id)}
+                >
+                  <Trash2 className="h-5 w-5" />
+                </Button>
+              </div>
+            ))}
+          </div>
+
+          <Button
+            variant="ghost"
+            className="mt-4 w-full border-2 border-dashed border-day-border dark:border-night-border"
+            onClick={addManualExercise}
+            disabled={!selectedPlanId}
+          >
+            <Plus className="mr-2 h-4 w-4" />
+            Add Exercise
+          </Button>
+        </div>
+
+        <div className="flex justify-end pt-4">
+          <Button variant="primary" onClick={() => void saveBuilder()} disabled={!selectedPlanId || saving || !dirty}>
+            <Save className="mr-2 h-4 w-4" />
+            {saving ? "Saving..." : "Save Custom Plan"}
+          </Button>
+        </div>
+      </Card>
+    </div>
+  );
+
+  const renderDefaultPlans = () => (
+    <div className="space-y-6">
+      <div className="mb-6 flex items-center space-x-4">
+        <Button variant="ghost" size="sm" onClick={() => setMode("selection")}>
+          <ArrowLeft className="h-5 w-5" />
+        </Button>
+        <div>
+          <h1 className="text-2xl font-bold text-day-text-primary dark:text-night-text-primary">
+            Select a Template
+          </h1>
+          <p className="text-sm text-day-text-secondary dark:text-night-text-secondary">
+            Expertly crafted plans ready to go.
+          </p>
+        </div>
+      </div>
+
+      {plans.length === 0 ? (
+        <Card className="p-6">
+          <p className="text-sm text-day-text-secondary dark:text-night-text-secondary">
+            No plans available yet. Use the AI Assistant to generate your first program.
+          </p>
+        </Card>
+      ) : (
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          {plans.map((plan) => (
+            <Card
+              key={plan.id}
+              className="cursor-pointer p-6 transition-all hover:border-day-accent-primary dark:hover:border-night-accent"
+            >
+              <div className="mb-4 flex items-start justify-between">
+                <div>
+                  <h3 className="text-lg font-bold">{plan.name}</h3>
+                  <p className="text-sm text-day-text-secondary dark:text-night-text-secondary">
+                    {nice(plan.goal)}
+                  </p>
+                </div>
+                <Badge variant="primary">{nice(plan.experience_level)}</Badge>
+              </div>
+              <div className="mb-4 flex items-center text-sm text-day-text-secondary dark:text-night-text-secondary">
+                <Clock className="mr-2 h-4 w-4" />
+                {plan.workout_days_per_week} days/week
+              </div>
+              <Button
+                variant="ghost"
+                className="w-full border border-day-border dark:border-night-border"
+                onClick={() => {
+                  setSelectedPlanId(plan.id);
+                  setMode("manual");
+                  setGeneratedVisible(false);
+                }}
+              >
+                Select This Plan
+              </Button>
+            </Card>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+
+  const renderWizard = () => (
+    <div className="space-y-6">
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.5 }}
+        className="flex items-center space-x-4"
+      >
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => (currentStep === 1 ? setMode("selection") : prevStep())}
+          className="p-2"
+        >
+          <ArrowLeft className="h-5 w-5" />
+        </Button>
+        <div>
+          <h1 className="text-3xl font-bold text-day-text-primary dark:text-night-text-primary">
+            Create Your Plan
+          </h1>
+          <p className="text-day-text-secondary dark:text-night-text-secondary">
+            Let&apos;s build a personalized workout plan just for you
+          </p>
+        </div>
+      </motion.div>
+
+      <div className="h-2 w-full rounded-full bg-day-border dark:bg-night-border">
+        <div
+          className="h-2 rounded-full bg-gradient-to-r from-day-accent-primary to-day-accent-secondary transition-all duration-300 dark:from-night-accent dark:to-red-600"
+          style={{ width: `${(currentStep / 4) * 100}%` }}
+        />
+      </div>
+
+      <div className="flex justify-center space-x-4">
+        {[1, 2, 3, 4].map((step) => (
+          <div
+            key={step}
+            className={`flex h-8 w-8 items-center justify-center rounded-full text-sm font-bold ${
+              step <= currentStep
+                ? "bg-day-accent-primary text-white dark:bg-night-accent"
+                : "bg-day-hover text-day-text-secondary dark:bg-night-hover dark:text-night-text-secondary"
+            }`}
+          >
+            {step < currentStep ? <CheckCircle className="h-4 w-4" /> : step}
+          </div>
+        ))}
+      </div>
+
+      <AnimatePresence mode="wait">
+        {currentStep === 1 ? (
+          <motion.div
+            key="step1"
+            initial={{ opacity: 0, x: 20 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: -20 }}
+            className="space-y-6"
+          >
+            <Card className="p-6">
+              <h2 className="mb-4 text-xl font-bold text-day-text-primary dark:text-night-text-primary">
+                What&apos;s your main fitness goal?
+              </h2>
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                {goals.map((goal) => {
+                  const Icon = goal.icon;
+                  return (
+                    <button
+                      key={goal.id}
+                      type="button"
+                      className={`rounded-lg border-2 p-4 text-left transition-all ${
+                        wizardData.goal === goal.id
+                          ? "border-day-accent-primary bg-day-accent-primary/10 dark:border-night-accent dark:bg-night-accent/10"
+                          : "border-day-border hover:border-day-accent-primary/50 dark:border-night-border dark:hover:border-night-accent/50"
+                      }`}
+                      onClick={() => handleWizardValue("goal", goal.id)}
+                    >
+                      <div className="flex items-center space-x-3">
+                        <Icon className="h-6 w-6 text-day-accent-primary dark:text-night-accent" />
+                        <div>
+                          <h3 className="font-semibold text-day-text-primary dark:text-night-text-primary">
+                            {goal.label}
+                          </h3>
+                          <p className="text-sm text-day-text-secondary dark:text-night-text-secondary">
+                            {goal.description}
+                          </p>
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </Card>
+
+            <Card className="p-6">
+              <h2 className="mb-4 text-xl font-bold text-day-text-primary dark:text-night-text-primary">
+                What&apos;s your current fitness level?
+              </h2>
+              <div className="space-y-3">
+                {fitnessLevels.map((level) => (
+                  <button
+                    key={level.id}
+                    type="button"
+                    className={`w-full rounded-lg border-2 p-4 text-left transition-all ${
+                      wizardData.fitnessLevel === level.id
+                        ? "border-day-accent-primary bg-day-accent-primary/10 dark:border-night-accent dark:bg-night-accent/10"
+                        : "border-day-border hover:border-day-accent-primary/50 dark:border-night-border dark:hover:border-night-accent/50"
+                    }`}
+                    onClick={() => handleWizardValue("fitnessLevel", level.id)}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h3 className="font-semibold text-day-text-primary dark:text-night-text-primary">
+                          {level.label}
+                        </h3>
+                        <p className="text-sm text-day-text-secondary dark:text-night-text-secondary">
+                          {level.description}
+                        </p>
+                      </div>
+                      {wizardData.fitnessLevel === level.id ? (
+                        <CheckCircle className="h-5 w-5 text-day-accent-primary dark:text-night-accent" />
+                      ) : null}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </Card>
+          </motion.div>
+        ) : null}
+
+        {currentStep === 2 ? (
+          <motion.div
+            key="step2"
+            initial={{ opacity: 0, x: 20 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: -20 }}
+            className="space-y-6"
+          >
+            <Card className="p-6">
+              <h2 className="mb-4 text-xl font-bold text-day-text-primary dark:text-night-text-primary">
+                How many days per week can you work out?
+              </h2>
+              <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                {availableDays.map((day) => (
+                  <button
+                    key={day.id}
+                    type="button"
+                    className={`rounded-lg border-2 p-3 text-center transition-all ${
+                      wizardData.availableDays.includes(day.id)
+                        ? "border-day-accent-primary bg-day-accent-primary/10 dark:border-night-accent dark:bg-night-accent/10"
+                        : "border-day-border hover:border-day-accent-primary/50 dark:border-night-border dark:hover:border-night-accent/50"
+                    }`}
+                    onClick={() => handleWizardToggle("availableDays", day.id)}
+                  >
+                    <span className="font-medium text-day-text-primary dark:text-night-text-primary">
+                      {day.label}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </Card>
+
+            <Card className="p-6">
+              <h2 className="mb-4 text-xl font-bold text-day-text-primary dark:text-night-text-primary">
+                How long do you want each workout to be?
+              </h2>
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                {durationOptions.map((duration) => (
+                  <button
+                    key={duration.id}
+                    type="button"
+                    className={`rounded-lg border-2 p-4 text-center transition-all ${
+                      wizardData.workoutDuration === duration.id
+                        ? "border-day-accent-primary bg-day-accent-primary/10 dark:border-night-accent dark:bg-night-accent/10"
+                        : "border-day-border hover:border-day-accent-primary/50 dark:border-night-border dark:hover:border-night-accent/50"
+                    }`}
+                    onClick={() => handleWizardValue("workoutDuration", duration.id)}
+                  >
+                    <h3 className="font-semibold text-day-text-primary dark:text-night-text-primary">
+                      {duration.label}
+                    </h3>
+                    <p className="text-sm text-day-text-secondary dark:text-night-text-secondary">
+                      {duration.description}
+                    </p>
+                  </button>
+                ))}
+              </div>
+            </Card>
+          </motion.div>
+        ) : null}
+
+        {currentStep === 3 ? (
+          <motion.div
+            key="step3"
+            initial={{ opacity: 0, x: 20 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: -20 }}
+            className="space-y-6"
+          >
+            <Card className="p-6">
+              <h2 className="mb-4 text-xl font-bold text-day-text-primary dark:text-night-text-primary">
+                What areas would you like to focus on?
+              </h2>
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                {focusAreas.map((area) => {
+                  const Icon = area.icon;
+                  return (
+                    <button
+                      key={area.id}
+                      type="button"
+                      className={`rounded-lg border-2 p-4 text-left transition-all ${
+                        wizardData.focusAreas.includes(area.id)
+                          ? "border-day-accent-primary bg-day-accent-primary/10 dark:border-night-accent dark:bg-night-accent/10"
+                          : "border-day-border hover:border-day-accent-primary/50 dark:border-night-border dark:hover:border-night-accent/50"
+                      }`}
+                      onClick={() => handleWizardToggle("focusAreas", area.id)}
+                    >
+                      <div className="flex items-center space-x-3">
+                        <Icon className="h-5 w-5 text-day-accent-primary dark:text-night-accent" />
+                        <span className="font-medium text-day-text-primary dark:text-night-text-primary">
+                          {area.label}
+                        </span>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </Card>
+
+            <Card className="p-6">
+              <h2 className="mb-4 text-xl font-bold text-day-text-primary dark:text-night-text-primary">
+                What&apos;s your experience with exercise?
+              </h2>
+              <div className="space-y-3">
+                {experienceOptions.map((experience) => (
+                  <button
+                    key={experience.id}
+                    type="button"
+                    className={`w-full rounded-lg border-2 p-4 text-left transition-all ${
+                      wizardData.experience === experience.id
+                        ? "border-day-accent-primary bg-day-accent-primary/10 dark:border-night-accent dark:bg-night-accent/10"
+                        : "border-day-border hover:border-day-accent-primary/50 dark:border-night-border dark:hover:border-night-accent/50"
+                    }`}
+                    onClick={() => handleWizardValue("experience", experience.id)}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h3 className="font-semibold text-day-text-primary dark:text-night-text-primary">
+                          {experience.label}
+                        </h3>
+                        <p className="text-sm text-day-text-secondary dark:text-night-text-secondary">
+                          {experience.description}
+                        </p>
+                      </div>
+                      {wizardData.experience === experience.id ? (
+                        <CheckCircle className="h-5 w-5 text-day-accent-primary dark:text-night-accent" />
+                      ) : null}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </Card>
+          </motion.div>
+        ) : null}
+
+        {currentStep === 4 ? (
+          <motion.div
+            key="step4"
+            initial={{ opacity: 0, x: 20 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: -20 }}
+            className="space-y-6"
+          >
+            <Card className="p-6">
+              <h2 className="mb-4 text-xl font-bold text-day-text-primary dark:text-night-text-primary">
+                What equipment do you have access to?
+              </h2>
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                {equipmentOptions.map((equipment) => (
+                  <button
+                    key={equipment.id}
+                    type="button"
+                    className={`rounded-lg border-2 p-4 text-left transition-all ${
+                      wizardData.equipment.includes(equipment.id)
+                        ? "border-day-accent-primary bg-day-accent-primary/10 dark:border-night-accent dark:bg-night-accent/10"
+                        : "border-day-border hover:border-day-accent-primary/50 dark:border-night-border dark:hover:border-night-accent/50"
+                    }`}
+                    onClick={() => handleWizardToggle("equipment", equipment.id)}
+                  >
+                    <h3 className="font-semibold text-day-text-primary dark:text-night-text-primary">
+                      {equipment.label}
+                    </h3>
+                    <p className="text-sm text-day-text-secondary dark:text-night-text-secondary">
+                      {equipment.description}
+                    </p>
+                  </button>
+                ))}
+              </div>
+            </Card>
+
+            <Card className="p-6">
+              <h2 className="mb-4 text-xl font-bold text-day-text-primary dark:text-night-text-primary">
+                What time of day do you prefer to work out?
+              </h2>
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                {timeOfDayOptions.map((time) => (
+                  <button
+                    key={time.id}
+                    type="button"
+                    className={`rounded-lg border-2 p-4 text-center transition-all ${
+                      wizardData.timeOfDay === time.id
+                        ? "border-day-accent-primary bg-day-accent-primary/10 dark:border-night-accent dark:bg-night-accent/10"
+                        : "border-day-border hover:border-day-accent-primary/50 dark:border-night-border dark:hover:border-night-accent/50"
+                    }`}
+                    onClick={() => handleWizardValue("timeOfDay", time.id)}
+                  >
+                    <h3 className="font-semibold text-day-text-primary dark:text-night-text-primary">
+                      {time.label}
+                    </h3>
+                    <p className="text-sm text-day-text-secondary dark:text-night-text-secondary">
+                      {time.description}
+                    </p>
+                  </button>
+                ))}
+              </div>
+            </Card>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
+
+      <div className="flex justify-between">
+        <Button variant="ghost" onClick={prevStep} disabled={currentStep === 1}>
+          Previous
+        </Button>
+
+        {currentStep < 4 ? (
+          <Button variant="primary" onClick={nextStep} disabled={!canProceed}>
+            Next
+          </Button>
+        ) : (
+          <Button variant="primary" onClick={() => void generatePlan()} disabled={!canProceed || isGenerating}>
+            {isGenerating ? "Generating..." : "Generate Plan"}
+          </Button>
+        )}
+      </div>
+
+      <AnimatePresence>
+        {generatedVisible && selectedPlan ? (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            className="space-y-6"
+          >
+            <Card className="p-6">
+              <div className="mb-6 flex items-center justify-between">
+                <h2 className="text-2xl font-bold text-day-text-primary dark:text-night-text-primary">
+                  Your Personalized Plan
+                </h2>
+                <Badge variant="primary" size="sm">
+                  {selectedPlan.workout_days_per_week} days/week
+                </Badge>
+              </div>
+
+              <div className="mb-6 grid grid-cols-1 gap-6 md:grid-cols-2">
+                <div>
+                  <h3 className="mb-3 text-lg font-semibold text-day-text-primary dark:text-night-text-primary">
+                    Plan Overview
+                  </h3>
+                  <div className="space-y-2 text-sm">
+                    <div className="flex justify-between">
+                      <span className="text-day-text-secondary dark:text-night-text-secondary">Goal:</span>
+                      <span className="font-medium capitalize">{nice(selectedPlan.goal)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-day-text-secondary dark:text-night-text-secondary">Level:</span>
+                      <span className="font-medium capitalize">{nice(selectedPlan.experience_level)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-day-text-secondary dark:text-night-text-secondary">Workouts/Week:</span>
+                      <span className="font-medium">{selectedPlan.workout_days_per_week}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-day-text-secondary dark:text-night-text-secondary">Mode:</span>
+                      <span className="font-medium capitalize">{nice(selectedPlan.planning_mode)}</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div>
+                  <h3 className="mb-3 text-lg font-semibold text-day-text-primary dark:text-night-text-primary">
+                    Weekly Schedule
+                  </h3>
+                  <div className="space-y-2">
+                    {weeklySchedule.length > 0 ? (
+                      weeklySchedule.map((item) => (
+                        <div key={item.day} className="flex justify-between text-sm">
+                          <span className="capitalize text-day-text-secondary dark:text-night-text-secondary">
+                            {item.day}:
+                          </span>
+                          <span className="font-medium text-day-text-primary dark:text-night-text-primary">
+                            {item.workout}
+                          </span>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="text-sm text-day-text-secondary dark:text-night-text-secondary">
+                        Weekly schedule will appear here after selecting your days.
+                      </p>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="mb-6">
+                <h3 className="mb-3 text-lg font-semibold text-day-text-primary dark:text-night-text-primary">
+                  Sample Exercises
+                </h3>
+                <div className="flex flex-wrap gap-2">
+                  {generatedExercises.length > 0 ? (
+                    generatedExercises.map((exercise) => (
+                      <Badge key={exercise} variant="ghost" size="sm">
+                        {exercise}
+                      </Badge>
+                    ))
+                  ) : (
+                    <p className="text-sm text-day-text-secondary dark:text-night-text-secondary">
+                      Save or edit your plan to populate sample exercises.
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex space-x-3">
+                <Link
+                  href="/dashboard/workout-session"
+                  className="inline-flex items-center rounded-lg bg-day-accent-primary px-4 py-2 text-sm font-semibold text-white transition hover:opacity-90 dark:bg-night-accent"
+                >
+                  <Play className="mr-2 h-4 w-4" />
+                  Start Plan
+                </Link>
+                <Button variant="secondary" onClick={() => setNotice("Plan saved to your programs.")}>
+                  <Save className="mr-2 h-4 w-4" />
+                  Save Plan
+                </Button>
+              </div>
+            </Card>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
+    </div>
+  );
 
   return (
     <div className="space-y-6 text-day-text-primary dark:text-night-text-primary">
-      <section className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold">Workout Program</h1>
-          <p className="mt-1 text-sm text-day-text-secondary dark:text-night-text-secondary">
-            Planner controls your program. Session execution happens on Workout Session.
-          </p>
-        </div>
-        <button type="button" onClick={() => setAdvanced((v) => !v)} className="rounded-lg border border-day-border px-3 py-2 text-sm font-semibold text-day-text-secondary hover:bg-day-hover dark:border-night-border dark:text-night-text-secondary dark:hover:bg-night-hover">
-          {advanced ? "Hide Advanced" : "Advanced Mode"}
-        </button>
-      </section>
-
       {error ? <Card className="p-4 text-sm text-red-600 dark:text-red-300">{error}</Card> : null}
       {notice ? <Card className="p-4 text-sm text-emerald-600 dark:text-emerald-300">{notice}</Card> : null}
 
-      <Card className="p-5 sm:p-6">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-wide text-day-text-secondary dark:text-night-text-secondary">Current Program</p>
-            <h2 className="mt-1 text-xl font-semibold">{selectedPlan?.name ?? "No plan yet"}</h2>
-            {selectedPlan ? <p className="mt-1 text-sm text-day-text-secondary dark:text-night-text-secondary">Goal: {nice(selectedPlan.goal)} | {selectedPlan.workout_days_per_week} days/week | {nice(selectedPlan.experience_level)}</p> : null}
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <button type="button" onClick={() => void generatePlan().catch((e) => setError(e instanceof Error ? e.message : "Failed"))} className="rounded-lg bg-day-accent-primary px-4 py-2 text-sm font-semibold text-white dark:bg-night-accent">Generate Plan</button>
-            <button type="button" onClick={() => setShowFull((v) => !v)} className="inline-flex items-center gap-1 rounded-lg border border-day-border px-4 py-2 text-sm font-semibold text-day-text-secondary hover:bg-day-hover dark:border-night-border dark:text-night-text-secondary dark:hover:bg-night-hover">
-              <Sparkles className="h-4 w-4" />
-              {showFull ? "Hide Full Workout" : "View Full Workout"}
-            </button>
-          </div>
-        </div>
-        {loading ? <div className="skeleton mt-4 h-24 rounded-lg" /> : null}
-      </Card>
+      {loading && mode !== "selection" ? <div className="skeleton h-24 rounded-2xl" /> : null}
 
-      {advanced ? (
-        <Card className="p-5 sm:p-6">
-          <div className="flex items-center justify-between gap-2">
-            <p className="text-sm font-semibold">Plans</p>
-            <button type="button" disabled={!dirty || saving} onClick={() => void saveBuilder().catch((e) => setError(e instanceof Error ? e.message : "Save failed"))} className="rounded-lg bg-day-accent-primary px-4 py-2 text-sm font-semibold text-white disabled:opacity-50 dark:bg-night-accent">{saving ? "Saving..." : "Save Builder"}</button>
-          </div>
-          <div className="mt-2 flex flex-wrap gap-2">
-            {plans.map((p) => (
-              <button key={p.id} type="button" onClick={() => setSelectedPlanId(p.id)} className={`rounded-lg border px-3 py-1.5 text-xs font-semibold ${selectedPlan?.id === p.id ? "border-day-accent-primary bg-sky-50 dark:border-night-accent dark:bg-night-hover" : "border-day-border text-day-text-secondary dark:border-night-border dark:text-night-text-secondary"}`}>{p.name}{p.is_active ? " (Active)" : ""}</button>
-            ))}
-          </div>
-
-          <div className="mt-4 grid gap-3 md:grid-cols-5">
-            <input className="input-field md:col-span-2" placeholder="Exercise search" value={query} onChange={(e) => setQuery(e.target.value)} />
-            <select className="input-field" value={muscle} onChange={(e) => setMuscle(e.target.value)}>
-              <option value="all">All muscles</option><option value="chest">Chest</option><option value="back">Back</option><option value="legs">Legs</option><option value="shoulders">Shoulders</option><option value="arms">Arms</option><option value="core">Core</option>
-            </select>
-            <select className="input-field" value={difficulty} onChange={(e) => setDifficulty(e.target.value)}>
-              <option value="all">All levels</option><option value="beginner">Beginner</option><option value="intermediate">Intermediate</option><option value="advanced">Advanced</option>
-            </select>
-            <button type="button" onClick={() => void runSearch("search").catch((e) => setError(e instanceof Error ? e.message : "Search failed"))} className="inline-flex items-center justify-center gap-2 rounded-lg border border-day-border px-3 py-2 text-sm font-semibold text-day-text-secondary hover:bg-day-hover dark:border-night-border dark:text-night-text-secondary dark:hover:bg-night-hover"><Search className="h-4 w-4" />{searching ? "Searching..." : "Search"}</button>
-            <select className="input-field" value={String(libraryDay)} onChange={(e) => setLibraryDay(Math.max(1, Math.min(7, Number(e.target.value))))}>
-              {Array.from({ length: 7 }).map((_, i) => <option key={i + 1} value={i + 1}>Day {i + 1}</option>)}
-            </select>
-            <button type="button" onClick={() => void runSearch("suggest").catch((e) => setError(e instanceof Error ? e.message : "Suggest failed"))} className="inline-flex items-center justify-center gap-2 rounded-lg border border-day-border px-3 py-2 text-sm font-semibold text-day-text-secondary hover:bg-day-hover dark:border-night-border dark:text-night-text-secondary dark:hover:bg-night-hover md:col-span-2"><Wand2 className="h-4 w-4" />AI Suggestions</button>
-            <input className="input-field" placeholder="Custom exercise name" value={customName} onChange={(e) => setCustomName(e.target.value)} />
-            <select className="input-field" value={customMuscle} onChange={(e) => setCustomMuscle(e.target.value)}>
-              <option value="chest">Chest</option><option value="back">Back</option><option value="legs">Legs</option><option value="shoulders">Shoulders</option><option value="arms">Arms</option><option value="core">Core</option>
-            </select>
-            <button type="button" disabled={creating} onClick={() => void createCustom().catch((e) => setError(e instanceof Error ? e.message : "Create failed"))} className="inline-flex items-center justify-center gap-2 rounded-lg border border-day-border px-3 py-2 text-sm font-semibold text-day-text-secondary hover:bg-day-hover dark:border-night-border dark:text-night-text-secondary dark:hover:bg-night-hover"><Plus className="h-4 w-4" />{creating ? "Creating..." : "Create + Add"}</button>
-          </div>
-
-          <div className="mt-3 grid gap-4 lg:grid-cols-2">
-            <div className="rounded-xl border border-day-border bg-day-hover/70 p-3 dark:border-night-border dark:bg-night-hover/60">
-              <p className="text-sm font-semibold">Library</p>
-              <div className="mt-2 space-y-2">
-                {results.slice(0, 8).map((x) => (
-                  <div key={x.id} className="flex items-center justify-between gap-2 rounded-lg border border-day-border bg-day-card px-3 py-2 text-sm dark:border-night-border dark:bg-night-card">
-                    <div><p className="font-medium">{x.name}</p><p className="text-xs text-day-text-secondary dark:text-night-text-secondary">{nice(x.target_muscle)} | {nice(x.difficulty_level)}</p></div>
-                    <button type="button" onClick={() => addToPlan(x)} className="rounded-lg border border-day-border px-2 py-1 text-xs font-semibold text-day-text-secondary hover:bg-day-hover dark:border-night-border dark:text-night-text-secondary dark:hover:bg-night-hover">Add</button>
-                  </div>
-                ))}
-              </div>
-            </div>
-            <div className="rounded-xl border border-day-border bg-day-hover/70 p-3 dark:border-night-border dark:bg-night-hover/60">
-              <p className="text-sm font-semibold">AI Suggestions</p>
-              <div className="mt-2 space-y-2">
-                {suggestions.slice(0, 8).map((x) => (
-                  <div key={x.id} className="flex items-center justify-between gap-2 rounded-lg border border-day-border bg-day-card px-3 py-2 text-sm dark:border-night-border dark:bg-night-card">
-                    <div><p className="font-medium">{x.name}</p><p className="text-xs text-day-text-secondary dark:text-night-text-secondary">{nice(x.target_muscle)} | {nice(x.difficulty_level)}</p></div>
-                    <button type="button" onClick={() => addToPlan(x)} className="rounded-lg border border-day-border px-2 py-1 text-xs font-semibold text-day-text-secondary hover:bg-day-hover dark:border-night-border dark:text-night-text-secondary dark:hover:bg-night-hover">Add</button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          <div className="mt-4 space-y-3">
-            {byDay.map(([day, items]) => (
-              <div key={day} className="rounded-xl border border-day-border bg-day-hover/60 p-3 dark:border-night-border dark:bg-night-hover/50" onDragOver={(e) => e.preventDefault()} onDrop={() => { if (dragId) { updateRow(dragId, (r) => ({ ...r, day_index: day })); setDragId(null); } }}>
-                <p className="mb-2 text-sm font-semibold">Day {day}</p>
-                <div className="space-y-2">
-                  {items.map((r) => (
-                    <div key={r.id} draggable onDragStart={() => setDragId(r.id)} onDragEnd={() => setDragId(null)} onDragOver={(e) => e.preventDefault()} onDrop={() => dropOnRow(r.id)} className="rounded-lg border border-day-border bg-day-card p-3 dark:border-night-border dark:bg-night-card">
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-2"><GripVertical className="h-4 w-4 text-day-text-secondary dark:text-night-text-secondary" /><p className="text-sm font-semibold">#{r.exercise_order} {r.exercise_name}</p></div>
-                        <div className="flex gap-1">
-                          <button type="button" onClick={() => moveRow(r.id, "up")} className="rounded-md border border-day-border px-2 py-1 text-xs dark:border-night-border"><ArrowUp className="h-3 w-3" /></button>
-                          <button type="button" onClick={() => moveRow(r.id, "down")} className="rounded-md border border-day-border px-2 py-1 text-xs dark:border-night-border"><ArrowDown className="h-3 w-3" /></button>
-                          <button type="button" onClick={() => removeRow(r.id)} className="rounded-md border border-day-border px-2 py-1 text-xs text-red-600 dark:border-night-border dark:text-red-300">x</button>
-                        </div>
-                      </div>
-                      <div className="mt-2 grid gap-2 md:grid-cols-6">
-                        <input className="input-field" type="number" min={1} max={20} value={r.sets} onChange={(e) => updateRow(r.id, (x) => ({ ...x, sets: Number(e.target.value) || 1 }))} />
-                        <input className="input-field" type="number" min={1} max={120} value={r.reps_min} onChange={(e) => updateRow(r.id, (x) => ({ ...x, reps_min: Number(e.target.value) || 1 }))} />
-                        <input className="input-field" type="number" min={1} max={120} value={r.reps_max} onChange={(e) => updateRow(r.id, (x) => ({ ...x, reps_max: Number(e.target.value) || 1 }))} />
-                        <input className="input-field" type="number" min={15} max={900} value={r.rest_seconds} onChange={(e) => updateRow(r.id, (x) => ({ ...x, rest_seconds: Number(e.target.value) || 60 }))} />
-                        <input className="input-field" placeholder="Superset" value={r.superset_group ?? ""} onChange={(e) => updateRow(r.id, (x) => ({ ...x, superset_group: superset(e.target.value) }))} />
-                        <select className="input-field" defaultValue="" onChange={(e) => { const key = e.target.value as keyof typeof templates; if (key) applyTemplate(r.id, key); e.currentTarget.value = ""; }}>
-                          <option value="">Template</option>
-                          {Object.entries(templates).map(([k, t]) => <option key={`${r.id}-${k}`} value={k}>{t.label}</option>)}
-                        </select>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-        </Card>
+      {mode === "selection" ? (
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+          {renderSelectionScreen()}
+        </motion.div>
       ) : null}
 
-      {showFull ? (
-        <Card className="p-5 sm:p-6">
-          <div className="flex items-center gap-2 text-lg font-semibold"><Sparkles className="h-5 w-5 text-amber-500" />Full Workout (AI Adjusted)</div>
-          <p className="mt-1 text-xs text-day-text-secondary dark:text-night-text-secondary">Cache: {today?.cacheState ?? "unknown"}</p>
-          <div className="mt-4 space-y-3">
-            {(today?.previewExercises ?? []).length === 0 ? (
-              <div className="rounded-lg border border-day-border bg-day-hover/70 px-3 py-3 text-sm text-day-text-secondary dark:border-night-border dark:bg-night-hover/60 dark:text-night-text-secondary">Using baseline plan - recommendations adapt after your workouts.</div>
-            ) : (
-              today?.previewExercises.map((row) => (
-                <div key={row.plan_exercise_id} className="rounded-xl border border-day-border bg-day-card p-4 dark:border-night-border dark:bg-night-card">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div>
-                      <p className="text-sm font-semibold">{row.exercise_name}</p>
-                      <p className="text-xs text-day-text-secondary dark:text-night-text-secondary">{row.recommended_sets} sets x {row.recommended_reps.min}-{row.recommended_reps.max} reps | {row.recommended_weight === null ? "Auto" : `${row.recommended_weight} kg`} | Rest {row.rest_seconds}s</p>
-                    </div>
-                    <span className={`rounded-full px-2 py-1 text-xs font-semibold ${badge(row.progression_action)}`}>{nice(row.progression_action)}</span>
-                  </div>
-                  {row.recommendation_reason.length > 0 ? <p className="mt-2 text-xs text-day-text-secondary dark:text-night-text-secondary">AI: {row.recommendation_reason.join(" | ")}</p> : null}
-                </div>
-              ))
-            )}
-          </div>
-        </Card>
+      {mode === "manual" ? (
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+          {renderManualBuilder()}
+        </motion.div>
       ) : null}
+
+      {mode === "defaults" ? (
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+          {renderDefaultPlans()}
+        </motion.div>
+      ) : null}
+
+      {mode === "wizard" ? renderWizard() : null}
     </div>
   );
 }

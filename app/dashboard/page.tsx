@@ -1,17 +1,22 @@
 "use client";
 
 import Link from "next/link";
+import { motion } from "framer-motion";
 import { useEffect, useMemo, useState } from "react";
-import { Activity, Medal, Zap } from "lucide-react";
+import {
+  ArrowRight,
+  Award,
+  Clock,
+  Flame,
+  Play,
+  Plus,
+  Target,
+  TrendingUp,
+  Zap,
+} from "lucide-react";
 import Card from "@/components/ui/Card";
 import Badge from "@/components/ui/Badge";
-import AICoachCard from "@/components/ai/AICoachCard";
-import RecoveryStatusCard from "@/components/recovery/RecoveryStatusCard";
-import TrainingLoadMeter from "@/components/training/TrainingLoadMeter";
-import ConsistencyTracker from "@/components/training/ConsistencyTracker";
 import { useAuth } from "@/lib/auth/AuthContext";
-
-type ProgressionAction = "increase" | "maintain" | "reduce" | "deload" | "substitute";
 
 type DashboardSummaryResponse = {
   requiresPlan?: boolean;
@@ -24,7 +29,6 @@ type DashboardSummaryResponse = {
     workouts_completed_7d?: number | null;
     consistency_score?: number | null;
     streak_days?: number | null;
-    weekly_volume_kg?: number | null;
   } | null;
   recentActivity: Array<{
     id: string;
@@ -35,75 +39,67 @@ type DashboardSummaryResponse = {
     performed_at: string;
     status?: string;
   }>;
-  todayWorkout?: {
-    workoutDate: string;
-    cacheState: string;
-    planId: string | null;
-    readinessBand: string;
-    readinessScore: number | null;
-    fatigueScore: number;
-    previewExercises: Array<{
-      plan_exercise_id: string;
-      exercise_name: string;
-      muscle_group: string;
-      exercise_order: number;
-      recommended_sets: number;
-      recommended_reps: { min: number; max: number };
-      recommended_weight: number | null;
-      rest_seconds: number;
-      progression_action: ProgressionAction;
-      recommendation_reason: string[];
-    }>;
-  };
   recoveryStatus?: {
     readiness_score?: number | null;
-    fatigue_score?: number | null;
-    sleep_minutes?: number | null;
-    soreness?: number | null;
-    stress?: number | null;
-    recommendation?: string;
   } | null;
   progressSummary?: {
     weeklyWorkouts: number;
     streakDays: number;
-    weeklyVolumeKg: number;
     consistencyScore: number;
-    volumeTrendPct: number;
   } | null;
   leaderboardSummary?: {
     rank: number | null;
     tier: string | null;
-    totalScore: number | null;
-  } | null;
-  trainingLoadState?: {
-    acwr?: number | null;
-    acute_load_7d?: number | null;
-    chronic_load_28d?: number | null;
-    overtraining_risk?: number | null;
-    plateau_risk?: number | null;
-    volume_trend_pct?: number | null;
   } | null;
   error?: string;
 };
 
-function actionClass(action: ProgressionAction) {
-  if (action === "increase") {
-    return "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300";
-  }
-  if (action === "maintain") {
-    return "bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-300";
-  }
-  if (action === "reduce") {
-    return "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300";
-  }
-  if (action === "deload") {
-    return "bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300";
-  }
-  return "bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300";
-}
+type StatCard = {
+  title: string;
+  value: string;
+  change: string;
+  changeType: "positive" | "negative";
+  icon: typeof Flame;
+  color: string;
+  tone: string;
+};
 
-function actionLabel(action: ProgressionAction) {
-  return action.replaceAll("_", " ").replace(/\b\w/g, (char) => char.toUpperCase());
+type GoalCard = {
+  id: string;
+  title: string;
+  current: number;
+  target: number;
+  unit: string;
+  progress: number;
+};
+
+function formatRelativeTime(value: string) {
+  const timestamp = new Date(value).getTime();
+  if (Number.isNaN(timestamp)) {
+    return value;
+  }
+
+  const diffMs = Date.now() - timestamp;
+  const diffMinutes = Math.floor(diffMs / (1000 * 60));
+
+  if (diffMinutes < 1) {
+    return "Just now";
+  }
+  if (diffMinutes < 60) {
+    return `${diffMinutes} min ago`;
+  }
+
+  const diffHours = Math.floor(diffMinutes / 60);
+  if (diffHours < 24) {
+    return `${diffHours} hour${diffHours === 1 ? "" : "s"} ago`;
+  }
+
+  const diffDays = Math.floor(diffHours / 24);
+  if (diffDays < 7) {
+    return `${diffDays} day${diffDays === 1 ? "" : "s"} ago`;
+  }
+
+  return new Date(value).toLocaleDateString();
 }
 
 export default function DashboardPage() {
@@ -111,23 +107,6 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [summary, setSummary] = useState<DashboardSummaryResponse | null>(null);
-
-  const [recoveryForm, setRecoveryForm] = useState({
-    sleepHours: "7.5",
-    soreness: "3",
-    stress: "3",
-    energy: "7",
-  });
-  const [recoverySaving, setRecoverySaving] = useState(false);
-  const [recoveryMessage, setRecoveryMessage] = useState<string | null>(null);
-
-  const [injuryForm, setInjuryForm] = useState({
-    bodyRegion: "",
-    painLevel: "3",
-    severity: "2",
-  });
-  const [injurySaving, setInjurySaving] = useState(false);
-  const [injuryMessage, setInjuryMessage] = useState<string | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -158,6 +137,7 @@ export default function DashboardPage() {
     const metadata = user?.user_metadata as
       | { full_name?: string; name?: string; user_name?: string }
       | undefined;
+
     return (
       metadata?.full_name ||
       metadata?.name ||
@@ -167,91 +147,123 @@ export default function DashboardPage() {
     );
   }, [user]);
 
-  const todayExercises = summary?.todayWorkout?.previewExercises ?? [];
   const requiresPlan = Boolean(summary?.requiresPlan);
-  const recovery = summary?.recoveryStatus ?? null;
-  const progress = summary?.progressSummary ?? null;
-  const leaderboard = summary?.leaderboardSummary ?? null;
-  const trainingLoad = summary?.trainingLoadState ?? null;
-  const trainingStats = summary?.trainingStats ?? null;
+  const weeklyWorkouts =
+    summary?.progressSummary?.weeklyWorkouts ??
+    Number(summary?.trainingStats?.workouts_completed_7d ?? summary?.metrics.workoutsThisPeriod ?? 0);
+  const streakDays =
+    summary?.progressSummary?.streakDays ??
+    Number(summary?.trainingStats?.streak_days ?? 0);
+  const consistencyScore =
+    summary?.progressSummary?.consistencyScore ??
+    Number(summary?.trainingStats?.consistency_score ?? 0);
+  const leaderboardRank = summary?.leaderboardSummary?.rank;
+  const leaderboardTier = summary?.leaderboardSummary?.tier ?? "Unranked";
 
-  const submitRecovery = async () => {
-    setRecoverySaving(true);
-    setRecoveryMessage(null);
-    try {
-      const sleepHours = Number(recoveryForm.sleepHours);
-      const response = await fetch("/api/recovery-metrics", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          metricDate: new Date().toISOString().slice(0, 10),
-          sleepDurationMinutes: Number.isFinite(sleepHours)
-            ? Math.max(0, Math.round(sleepHours * 60))
-            : null,
-          sorenessLevel: Number(recoveryForm.soreness),
-          stressLevel: Number(recoveryForm.stress),
-          energyLevel: Number(recoveryForm.energy),
-        }),
-      });
-      const payload = (await response.json()) as { error?: string };
-      if (!response.ok) {
-        throw new Error(payload.error ?? "Failed to save recovery metrics");
-      }
-      setRecoveryMessage("Recovery metrics saved.");
-      await load();
-    } catch (saveError) {
-      setRecoveryMessage(
-        saveError instanceof Error ? saveError.message : "Failed to save recovery metrics",
-      );
-    } finally {
-      setRecoverySaving(false);
-    }
-  };
+  const stats = useMemo<StatCard[]>(
+    () => [
+      {
+        title: "Workouts This Week",
+        value: String(summary?.metrics.workoutsThisPeriod ?? 0),
+        change: `${weeklyWorkouts}/7`,
+        changeType: "positive",
+        icon: Flame,
+        color: "text-orange-500",
+        tone: "bg-orange-500/10",
+      },
+      {
+        title: "Calories Burned",
+        value: Math.round(summary?.metrics.caloriesBurned ?? 0).toLocaleString(),
+        change: "Last 7 days",
+        changeType: "positive",
+        icon: Zap,
+        color: "text-yellow-500",
+        tone: "bg-yellow-500/10",
+      },
+      {
+        title: "Active Minutes",
+        value: String(Math.round(summary?.metrics.activeMinutes ?? 0)),
+        change: `Streak ${streakDays}`,
+        changeType: streakDays > 0 ? "positive" : "negative",
+        icon: Clock,
+        color: "text-blue-500",
+        tone: "bg-blue-500/10",
+      },
+      {
+        title: "Leaderboard",
+        value: leaderboardRank ? `#${leaderboardRank}` : "-",
+        change: leaderboardTier,
+        changeType: leaderboardRank ? "positive" : "negative",
+        icon: TrendingUp,
+        color: "text-purple-500",
+        tone: "bg-purple-500/10",
+      },
+    ],
+    [leaderboardRank, leaderboardTier, streakDays, summary?.metrics.activeMinutes, summary?.metrics.caloriesBurned, summary?.metrics.workoutsThisPeriod, weeklyWorkouts],
+  );
 
-  const submitInjury = async () => {
-    if (!injuryForm.bodyRegion.trim()) {
-      setInjuryMessage("Body region is required.");
-      return;
-    }
+  const goals = useMemo<GoalCard[]>(
+    () => [
+      {
+        id: "weekly-workouts",
+        title: "Weekly Workouts",
+        current: weeklyWorkouts,
+        target: 7,
+        unit: "workouts",
+        progress: Math.min(Math.round((weeklyWorkouts / 7) * 100), 100),
+      },
+      {
+        id: "current-streak",
+        title: "Current Streak",
+        current: streakDays,
+        target: 14,
+        unit: "days",
+        progress: Math.min(Math.round((streakDays / 14) * 100), 100),
+      },
+      {
+        id: "consistency-score",
+        title: "Consistency Score",
+        current: Math.round(consistencyScore),
+        target: 100,
+        unit: "score",
+        progress: Math.min(Math.round(consistencyScore), 100),
+      },
+    ],
+    [consistencyScore, streakDays, weeklyWorkouts],
+  );
 
-    setInjurySaving(true);
-    setInjuryMessage(null);
-    try {
-      const response = await fetch("/api/injury-flags", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          bodyRegion: injuryForm.bodyRegion.trim(),
-          painLevel: Number(injuryForm.painLevel),
-          severity: Number(injuryForm.severity),
-          injuryType: "other",
-        }),
-      });
-      const payload = (await response.json()) as { error?: string };
-      if (!response.ok) {
-        throw new Error(payload.error ?? "Failed to report injury");
-      }
-      setInjuryMessage("Injury flag recorded.");
-      setInjuryForm((current) => ({ ...current, bodyRegion: "" }));
-    } catch (saveError) {
-      setInjuryMessage(
-        saveError instanceof Error ? saveError.message : "Failed to report injury",
-      );
-    } finally {
-      setInjurySaving(false);
-    }
-  };
+  const recentWorkouts = summary?.recentActivity ?? [];
+
+  if (loading) {
+    return (
+      <div className="space-y-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+          {[0, 1, 2, 3].map((index) => (
+            <div key={index} className="card p-6">
+              <div className="skeleton h-4 w-24 mb-2" />
+              <div className="skeleton h-8 w-16 mb-2" />
+              <div className="skeleton h-3 w-20" />
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="space-y-6 text-day-text-primary dark:text-night-text-primary">
-      <section>
-        <h1 className="text-2xl font-semibold">Welcome back, {displayName}</h1>
-        <p className="mt-1 text-sm text-day-text-secondary dark:text-night-text-secondary">
-          {requiresPlan
-            ? "Generate your first plan to start smart workout sessions."
-            : "Dashboard to session is now one flow: start workout, log sets, finish, AI adapts."}
+    <div className="space-y-6">
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.5 }}
+      >
+        <h1 className="text-3xl font-bold text-day-text-primary dark:text-night-text-primary mb-2">
+          Welcome back, {displayName}! 👋
+        </h1>
+        <p className="text-day-text-secondary dark:text-night-text-secondary">
+          Ready to crush your fitness goals today?
         </p>
-      </section>
+      </motion.div>
 
       {error ? (
         <Card className="p-5">
@@ -266,324 +278,270 @@ export default function DashboardPage() {
         </Card>
       ) : null}
 
-      <AICoachCard
-        requiresPlan={requiresPlan}
-        recommendations={todayExercises}
-        recovery={recovery}
-        trainingLoad={trainingLoad}
-        trainingStats={trainingStats}
-      />
-
-      <Card className="p-5 sm:p-6">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-wide text-day-text-secondary dark:text-night-text-secondary">
-              Today&apos;s Workout
-            </p>
-            <h2 className="mt-1 text-xl font-semibold">
-              {todayExercises.length > 0
-                ? `${todayExercises.length} planned exercises`
-                : "No planned exercises yet"}
-            </h2>
-            <p className="mt-1 text-sm text-day-text-secondary dark:text-night-text-secondary">
-              Warmup - Main exercises - Cooldown
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {requiresPlan ? null : (
-              <Link
-                href="/dashboard/workout-session"
-                className="rounded-lg bg-day-accent-primary px-4 py-2 text-sm font-semibold text-white dark:bg-night-accent"
-              >
-                Start Workout
-              </Link>
-            )}
-            <Link
-              href="/dashboard/workout-planner"
-              className="rounded-lg border border-day-border px-4 py-2 text-sm font-semibold text-day-text-secondary hover:bg-day-hover dark:border-night-border dark:text-night-text-secondary dark:hover:bg-night-hover"
-            >
-              {requiresPlan ? "Generate Your First Workout Plan" : "View Full Workout"}
-            </Link>
-          </div>
-        </div>
-
-        <div className="mt-4 space-y-2">
-          {loading ? (
-            <div className="space-y-2">
-              <div className="skeleton h-12 rounded-lg" />
-              <div className="skeleton h-12 rounded-lg" />
-              <div className="skeleton h-12 rounded-lg" />
-            </div>
-          ) : requiresPlan ? (
-            <div className="rounded-lg border border-day-border bg-day-hover/70 px-3 py-3 text-sm text-day-text-secondary dark:border-night-border dark:bg-night-hover/60 dark:text-night-text-secondary">
-              Generate your first workout plan to unlock today&apos;s session.
-            </div>
-          ) : todayExercises.length === 0 ? (
-            <div className="rounded-lg border border-day-border bg-day-hover/70 px-3 py-3 text-sm text-day-text-secondary dark:border-night-border dark:bg-night-hover/60 dark:text-night-text-secondary">
-              Baseline plan will appear after your first generated workout.
-            </div>
-          ) : (
-            todayExercises.slice(0, 5).map((exercise) => (
-              <div
-                key={exercise.plan_exercise_id}
-                className="rounded-lg border border-day-border bg-day-hover/70 px-3 py-3 dark:border-night-border dark:bg-night-hover/60"
-              >
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <p className="text-sm font-semibold">{exercise.exercise_name}</p>
-                    <p className="text-xs text-day-text-secondary dark:text-night-text-secondary">
-                      {exercise.recommended_sets} sets x {exercise.recommended_reps.min}-
-                      {exercise.recommended_reps.max} reps {" | "}
-                      {exercise.recommended_weight === null
-                        ? "Auto load"
-                        : `${exercise.recommended_weight} kg`}
-                      {" | Rest "}
-                      {exercise.rest_seconds}s
-                    </p>
-                  </div>
-                  <Badge className={actionClass(exercise.progression_action)} variant="ghost" size="sm">
-                    {actionLabel(exercise.progression_action)}
-                  </Badge>
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.5, delay: 0.1 }}
+        className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6"
+      >
+        {stats.map((stat) => {
+          const Icon = stat.icon;
+          return (
+            <Card key={stat.title} className="p-6">
+              <div className="flex items-center justify-between mb-4">
+                <div className={`p-2 rounded-lg ${stat.tone}`}>
+                  <Icon className={`w-5 h-5 ${stat.color}`} />
                 </div>
-                {exercise.recommendation_reason.length > 0 ? (
-                  <p className="mt-1 text-xs text-day-text-secondary dark:text-night-text-secondary">
-                    AI: {exercise.recommendation_reason[0]}
-                  </p>
-                ) : null}
+                <Badge
+                  variant={stat.changeType === "positive" ? "success" : "danger"}
+                  size="sm"
+                >
+                  {stat.change}
+                </Badge>
               </div>
-            ))
-          )}
-        </div>
-      </Card>
+              <h3 className="text-2xl font-bold text-day-text-primary dark:text-night-text-primary mb-1">
+                {stat.value}
+              </h3>
+              <p className="text-sm text-day-text-secondary dark:text-night-text-secondary">
+                {stat.title}
+              </p>
+            </Card>
+          );
+        })}
+      </motion.div>
 
-      <section className="grid gap-4 lg:grid-cols-3">
-        <RecoveryStatusCard recovery={recovery} />
-        <TrainingLoadMeter loadState={trainingLoad} />
-        <ConsistencyTracker
-          weeklyWorkouts={
-            progress?.weeklyWorkouts ??
-            Number(trainingStats?.workouts_completed_7d ?? summary?.metrics.workoutsThisPeriod ?? 0)
-          }
-          streakDays={progress?.streakDays ?? Number(trainingStats?.streak_days ?? 0)}
-          consistencyScore={
-            progress?.consistencyScore ?? Number(trainingStats?.consistency_score ?? 0)
-          }
-        />
-      </section>
-
-      <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <Card className="p-5">
-          <div className="flex items-center gap-2 text-sm font-semibold">
-            <Activity className="h-4 w-4 text-sky-500" />
-            Workouts This Week
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.5, delay: 0.2 }}
+        className="grid grid-cols-1 lg:grid-cols-3 gap-6"
+      >
+        <Card className="p-6 bg-gradient-to-br from-day-accent-primary to-day-accent-secondary dark:to-night-border dark:from-red-600 text-white">
+          <div className="flex items-center justify-between mb-4">
+            <div className="p-2 rounded-lg bg-white/20">
+              <Play className="w-5 h-5" />
+            </div>
+            <Badge
+              variant="outline"
+              size="sm"
+              className="border-white dark:border-white text-white dark:text-night-text-primary"
+            >
+              Quick Start
+            </Badge>
           </div>
-          <p className="mt-2 text-xl font-semibold">{summary?.metrics.workoutsThisPeriod ?? 0}</p>
-        </Card>
-        <Card className="p-5">
-          <div className="flex items-center gap-2 text-sm font-semibold">
-            <Zap className="h-4 w-4 text-orange-500" />
-            Calories This Week
-          </div>
-          <p className="mt-2 text-xl font-semibold">
-            {Math.round(summary?.metrics.caloriesBurned ?? 0)}
+          <h3 className="text-xl font-bold mb-2">Start Workout</h3>
+          <p className="text-white/80 mb-4">
+            Begin your next training session with AI-powered guidance
           </p>
-        </Card>
-        <Card className="p-5">
-          <div className="flex items-center gap-2 text-sm font-semibold">
-            <Activity className="h-4 w-4 text-blue-500" />
-            Active Minutes
-          </div>
-          <p className="mt-2 text-xl font-semibold">
-            {Math.round(summary?.metrics.activeMinutes ?? 0)}
-          </p>
-        </Card>
-        <Card className="p-5">
-          <div className="flex items-center gap-2 text-sm font-semibold">
-            <Medal className="h-4 w-4 text-violet-500" />
-            Leaderboard
-          </div>
-          <p className="mt-2 text-xl font-semibold">#{leaderboard?.rank ?? "-"}</p>
-          <p className="text-xs text-day-text-secondary dark:text-night-text-secondary">
-            {leaderboard?.tier ?? "Unranked"} | Score {Math.round(Number(leaderboard?.totalScore ?? 0))}
-          </p>
-        </Card>
-      </section>
-
-      <section className="grid gap-4 lg:grid-cols-2">
-        <Card className="p-5">
-          <div className="text-sm font-semibold">Recovery Check-In</div>
-          <p className="mt-1 text-xs text-day-text-secondary dark:text-night-text-secondary">
-            Log sleep/soreness/stress/energy so AI can adapt tomorrow.
-          </p>
-          <div className="mt-3 grid gap-3 sm:grid-cols-2">
-            <label className="text-xs">
-              <span className="text-day-text-secondary dark:text-night-text-secondary">
-                Sleep (hours)
-              </span>
-              <input
-                type="number"
-                min={0}
-                max={24}
-                step={0.5}
-                className="input-field mt-1"
-                value={recoveryForm.sleepHours}
-                onChange={(event) =>
-                  setRecoveryForm((current) => ({
-                    ...current,
-                    sleepHours: event.target.value,
-                  }))
-                }
-              />
-            </label>
-            <label className="text-xs">
-              <span className="text-day-text-secondary dark:text-night-text-secondary">
-                Soreness (0-10)
-              </span>
-              <input
-                type="number"
-                min={0}
-                max={10}
-                step={1}
-                className="input-field mt-1"
-                value={recoveryForm.soreness}
-                onChange={(event) =>
-                  setRecoveryForm((current) => ({
-                    ...current,
-                    soreness: event.target.value,
-                  }))
-                }
-              />
-            </label>
-            <label className="text-xs">
-              <span className="text-day-text-secondary dark:text-night-text-secondary">
-                Stress (0-10)
-              </span>
-              <input
-                type="number"
-                min={0}
-                max={10}
-                step={1}
-                className="input-field mt-1"
-                value={recoveryForm.stress}
-                onChange={(event) =>
-                  setRecoveryForm((current) => ({
-                    ...current,
-                    stress: event.target.value,
-                  }))
-                }
-              />
-            </label>
-            <label className="text-xs">
-              <span className="text-day-text-secondary dark:text-night-text-secondary">
-                Energy (0-10)
-              </span>
-              <input
-                type="number"
-                min={0}
-                max={10}
-                step={1}
-                className="input-field mt-1"
-                value={recoveryForm.energy}
-                onChange={(event) =>
-                  setRecoveryForm((current) => ({
-                    ...current,
-                    energy: event.target.value,
-                  }))
-                }
-              />
-            </label>
-          </div>
-          <button
-            type="button"
-            disabled={recoverySaving}
-            onClick={() => void submitRecovery()}
-            className="mt-3 rounded-lg bg-day-accent-primary px-4 py-2 text-sm font-semibold text-white disabled:opacity-60 dark:bg-night-accent"
+          <Link
+            href={requiresPlan ? "/dashboard/workout-planner" : "/dashboard/workout-session"}
+            className="inline-flex items-center justify-center rounded-lg border border-white px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-white hover:text-day-accent-primary"
           >
-            {recoverySaving ? "Saving..." : "Save Recovery Metrics"}
-          </button>
-          {recoveryMessage ? (
-            <p className="mt-2 text-xs text-day-text-secondary dark:text-night-text-secondary">
-              {recoveryMessage}
-            </p>
-          ) : null}
+            Start Now
+          </Link>
         </Card>
 
-        <Card className="p-5">
-          <div className="text-sm font-semibold">Injury Report</div>
-          <p className="mt-1 text-xs text-day-text-secondary dark:text-night-text-secondary">
-            Report pain signals to help AI substitute risky movements.
-          </p>
-          <div className="mt-3 grid gap-3 sm:grid-cols-2">
-            <label className="text-xs sm:col-span-2">
-              <span className="text-day-text-secondary dark:text-night-text-secondary">
-                Body Region
-              </span>
-              <input
-                className="input-field mt-1"
-                placeholder="e.g. Left shoulder"
-                value={injuryForm.bodyRegion}
-                onChange={(event) =>
-                  setInjuryForm((current) => ({
-                    ...current,
-                    bodyRegion: event.target.value,
-                  }))
-                }
-              />
-            </label>
-            <label className="text-xs">
-              <span className="text-day-text-secondary dark:text-night-text-secondary">
-                Pain Level (0-10)
-              </span>
-              <input
-                type="number"
-                min={0}
-                max={10}
-                step={1}
-                className="input-field mt-1"
-                value={injuryForm.painLevel}
-                onChange={(event) =>
-                  setInjuryForm((current) => ({
-                    ...current,
-                    painLevel: event.target.value,
-                  }))
-                }
-              />
-            </label>
-            <label className="text-xs">
-              <span className="text-day-text-secondary dark:text-night-text-secondary">
-                Severity (1-5)
-              </span>
-              <input
-                type="number"
-                min={1}
-                max={5}
-                step={1}
-                className="input-field mt-1"
-                value={injuryForm.severity}
-                onChange={(event) =>
-                  setInjuryForm((current) => ({
-                    ...current,
-                    severity: event.target.value,
-                  }))
-                }
-              />
-            </label>
+        <Card className="p-6">
+          <div className="flex items-center justify-between mb-4">
+            <div className="p-2 rounded-lg bg-day-accent-secondary/10">
+              <Plus className="w-5 h-5 text-day-accent-secondary" />
+            </div>
+            <Badge variant="secondary" size="sm">
+              New
+            </Badge>
           </div>
-          <button
-            type="button"
-            disabled={injurySaving}
-            onClick={() => void submitInjury()}
-            className="mt-3 rounded-lg border border-day-border px-4 py-2 text-sm font-semibold text-day-text-secondary hover:bg-day-hover disabled:opacity-60 dark:border-night-border dark:text-night-text-secondary dark:hover:bg-night-hover"
+          <h3 className="text-xl font-bold text-day-text-primary dark:text-night-text-primary mb-2">
+            Create Plan
+          </h3>
+          <p className="text-day-text-secondary dark:text-night-text-secondary mb-4">
+            Generate a personalized workout plan based on your goals
+          </p>
+          <Link
+            href="/dashboard/workout-planner"
+            className="inline-flex items-center justify-center rounded-lg bg-day-accent-secondary px-3 py-2 text-sm font-semibold text-white transition-opacity hover:opacity-90"
           >
-            {injurySaving ? "Saving..." : "Report Injury"}
-          </button>
-          {injuryMessage ? (
-            <p className="mt-2 text-xs text-day-text-secondary dark:text-night-text-secondary">
-              {injuryMessage}
-            </p>
-          ) : null}
+            Create Plan
+          </Link>
         </Card>
-      </section>
+
+        <Card className="p-6">
+          <div className="flex items-center justify-between mb-4">
+            <div className="p-2 rounded-lg bg-day-accent-primary/10">
+              <TrendingUp className="w-5 h-5 text-day-accent-primary" />
+            </div>
+            <Badge variant="primary" size="sm">
+              Trending
+            </Badge>
+          </div>
+          <h3 className="text-xl font-bold text-day-text-primary dark:text-night-text-primary mb-2">
+            View Progress
+          </h3>
+          <p className="text-day-text-secondary dark:text-night-text-secondary mb-4">
+            Track your fitness journey with detailed analytics
+          </p>
+          <Link
+            href="/dashboard/progress"
+            className="inline-flex items-center justify-center rounded-lg bg-day-accent-primary px-3 py-2 text-sm font-semibold text-white transition-opacity hover:opacity-90 dark:bg-night-accent"
+          >
+            View Progress
+          </Link>
+        </Card>
+      </motion.div>
+
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.5, delay: 0.3 }}
+        className="grid grid-cols-1 lg:grid-cols-2 gap-6"
+      >
+        <Card padding="p-0">
+          <div className="p-6 pb-0">
+            <div className="flex items-center justify-between">
+              <h2 className="text-xl font-bold text-day-text-primary dark:text-night-text-primary">
+                Your Goals
+              </h2>
+              <Link
+                href="/dashboard/progress"
+                className="inline-flex items-center text-sm font-semibold text-day-text-primary dark:text-night-text-primary hover:text-day-accent-primary dark:hover:text-night-accent"
+              >
+                View All
+                <ArrowRight className="w-4 h-4 ml-1" />
+              </Link>
+            </div>
+          </div>
+          <div className="p-6">
+            <div className="space-y-4">
+              {goals.map((goal) => (
+                <div key={goal.id} className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-medium text-day-text-primary dark:text-night-text-primary">
+                      {goal.title}
+                    </span>
+                    <span className="text-sm text-day-text-secondary dark:text-night-text-secondary">
+                      {goal.current}/{goal.target} {goal.unit}
+                    </span>
+                  </div>
+                  <div className="w-full bg-day-border dark:bg-night-border rounded-full h-2">
+                    <div
+                      className="bg-gradient-to-r from-day-accent-primary to-day-accent-secondary dark:from-night-accent dark:to-red-600 h-2 rounded-full transition-all duration-300"
+                      style={{ width: `${goal.progress}%` }}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </Card>
+
+        <Card padding="p-0">
+          <div className="p-6 pb-0">
+            <div className="flex items-center justify-between">
+              <h2 className="text-xl font-bold text-day-text-primary dark:text-night-text-primary">
+                Recent Workouts
+              </h2>
+              <Link
+                href="/dashboard/workouts"
+                className="inline-flex items-center text-sm font-semibold text-day-text-primary dark:text-night-text-primary hover:text-day-accent-primary dark:hover:text-night-accent"
+              >
+                View All
+                <ArrowRight className="w-4 h-4 ml-1" />
+              </Link>
+            </div>
+          </div>
+          <div className="p-6">
+            <div className="space-y-4">
+              {recentWorkouts.length === 0 ? (
+                <div className="text-sm text-day-text-secondary dark:text-night-text-secondary">
+                  No workouts yet. Start your first session to populate your dashboard.
+                </div>
+              ) : (
+                recentWorkouts.map((workout) => (
+                  <div
+                    key={workout.id}
+                    className="flex items-center justify-between p-3 rounded-lg hover:bg-day-hover dark:hover:bg-night-hover transition-colors"
+                  >
+                    <div className="flex items-center space-x-3">
+                      <div className="w-10 h-10 bg-gradient-to-br from-day-accent-primary to-day-accent-secondary dark:from-night-accent dark:to-red-600 rounded-lg flex items-center justify-center">
+                        <Play className="w-4 h-4 text-white" />
+                      </div>
+                      <div>
+                        <h3 className="font-medium text-day-text-primary dark:text-night-text-primary">
+                          {workout.name}
+                        </h3>
+                        <p className="text-sm text-day-text-secondary dark:text-night-text-secondary">
+                          {Math.round(workout.duration_minutes ?? 0)} min • {Math.round(workout.calories ?? 0)} cal
+                        </p>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <Badge variant="ghost" size="sm">
+                        {workout.type ?? workout.status ?? "Workout"}
+                      </Badge>
+                      <p className="text-xs text-day-text-secondary dark:text-night-text-secondary mt-1">
+                        {formatRelativeTime(workout.performed_at)}
+                      </p>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </Card>
+      </motion.div>
+
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.5, delay: 0.4 }}
+      >
+        <Card padding="p-0">
+          <div className="p-6 pb-0">
+            <div className="flex items-center space-x-2">
+              <Award className="w-5 h-5 text-yellow-500" />
+              <h2 className="text-xl font-bold text-day-text-primary dark:text-night-text-primary">
+                Recent Achievements
+              </h2>
+            </div>
+          </div>
+          <div className="p-6">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="text-center p-4 rounded-lg bg-yellow-50 dark:bg-yellow-900/20">
+                <div className="w-12 h-12 bg-yellow-500 rounded-full flex items-center justify-center mx-auto mb-2">
+                  <Flame className="w-6 h-6 text-white" />
+                </div>
+                <h3 className="font-medium text-day-text-primary dark:text-night-text-primary">
+                  Streak Master
+                </h3>
+                <p className="text-sm text-day-text-secondary dark:text-night-text-secondary">
+                  7 day workout streak
+                </p>
+              </div>
+              <div className="text-center p-4 rounded-lg bg-blue-50 dark:bg-blue-900/20">
+                <div className="w-12 h-12 bg-blue-500 rounded-full flex items-center justify-center mx-auto mb-2">
+                  <Target className="w-6 h-6 text-white" />
+                </div>
+                <h3 className="font-medium text-day-text-primary dark:text-night-text-primary">
+                  Goal Crusher
+                </h3>
+                <p className="text-sm text-day-text-secondary dark:text-night-text-secondary">
+                  Hit 3 monthly goals
+                </p>
+              </div>
+              <div className="text-center p-4 rounded-lg bg-green-50 dark:bg-green-900/20">
+                <div className="w-12 h-12 bg-green-500 rounded-full flex items-center justify-center mx-auto mb-2">
+                  <Zap className="w-6 h-6 text-white" />
+                </div>
+                <h3 className="font-medium text-day-text-primary dark:text-night-text-primary">
+                  Energy Boost
+                </h3>
+                <p className="text-sm text-day-text-secondary dark:text-night-text-secondary">
+                  Burned 2000+ calories
+                </p>
+              </div>
+            </div>
+          </div>
+        </Card>
+      </motion.div>
     </div>
   );
 }

@@ -9,6 +9,7 @@ import {
   BarChart3,
   CheckCircle2,
   ShieldCheck,
+  ShoppingBag,
   Users,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -53,10 +54,38 @@ type OverviewResponse = {
   }>;
 };
 
+type FeatureFlagName = "social" | "shop";
+
+type FeatureFlagState = {
+  enabled: boolean;
+  beta: boolean;
+};
+
+type FeatureFlags = Record<FeatureFlagName, FeatureFlagState>;
+
+type FeatureFlagsResponse = {
+  flags?: Partial<Record<FeatureFlagName, Partial<FeatureFlagState>>>;
+  error?: string;
+};
+
+const defaultFeatureFlags: FeatureFlags = {
+  social: { enabled: false, beta: true },
+  shop: { enabled: false, beta: false },
+};
+
 const sectionVariants = {
   hidden: { opacity: 0, y: 16 },
   visible: { opacity: 1, y: 0 },
 };
+
+function mergeFeatureFlags(
+  flags?: Partial<Record<FeatureFlagName, Partial<FeatureFlagState>>>,
+): FeatureFlags {
+  return {
+    social: { ...defaultFeatureFlags.social, ...(flags?.social ?? {}) },
+    shop: { ...defaultFeatureFlags.shop, ...(flags?.shop ?? {}) },
+  };
+}
 
 function formatDate(value: string | null) {
   if (!value) return "-";
@@ -71,6 +100,13 @@ function getName(name: string | null, email: string | null) {
 
 export default function AdminDashboardPage() {
   const [data, setData] = useState<OverviewResponse | null>(null);
+  const [featureFlags, setFeatureFlags] = useState<FeatureFlags>(defaultFeatureFlags);
+  const [featureFlagsLoading, setFeatureFlagsLoading] = useState(true);
+  const [featureFlagsError, setFeatureFlagsError] = useState<string | null>(null);
+  const [featureFlagSaving, setFeatureFlagSaving] = useState<Record<FeatureFlagName, boolean>>({
+    social: false,
+    shop: false,
+  });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -96,9 +132,95 @@ export default function AdminDashboardPage() {
     load();
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadFeatureFlags = async () => {
+      setFeatureFlagsLoading(true);
+      setFeatureFlagsError(null);
+      try {
+        const response = await fetch("/api/features", { cache: "no-store" });
+        const payload = (await response.json()) as FeatureFlagsResponse;
+        if (!response.ok) {
+          throw new Error(payload.error ?? "Failed to load feature flags.");
+        }
+        if (!cancelled) {
+          setFeatureFlags(mergeFeatureFlags(payload.flags));
+        }
+      } catch (featureError) {
+        if (!cancelled) {
+          setFeatureFlagsError(
+            featureError instanceof Error
+              ? featureError.message
+              : "Failed to load feature flags.",
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setFeatureFlagsLoading(false);
+        }
+      }
+    };
+
+    void loadFeatureFlags();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const displayName = useMemo(() => {
     return getName(data?.admin.name ?? null, data?.admin.email ?? null);
   }, [data?.admin.email, data?.admin.name]);
+
+  const featureItems: Array<{
+    name: FeatureFlagName;
+    label: string;
+    description: string;
+    icon: typeof Users;
+  }> = [
+    {
+      name: "social",
+      label: "Social",
+      description: "Community feed, posts, comments, and member interaction.",
+      icon: Users,
+    },
+    {
+      name: "shop",
+      label: "Shop",
+      description: "Marketplace navigation and storefront access for members.",
+      icon: ShoppingBag,
+    },
+  ];
+
+  const handleFeatureToggle = async (name: FeatureFlagName) => {
+    setFeatureFlagSaving((current) => ({ ...current, [name]: true }));
+    setFeatureFlagsError(null);
+
+    try {
+      const response = await fetch("/api/features", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name,
+          enabled: !featureFlags[name].enabled,
+        }),
+      });
+      const payload = (await response.json()) as FeatureFlagsResponse;
+      if (!response.ok) {
+        throw new Error(payload.error ?? "Failed to update feature flags.");
+      }
+      setFeatureFlags(mergeFeatureFlags(payload.flags));
+    } catch (featureError) {
+      setFeatureFlagsError(
+        featureError instanceof Error
+          ? featureError.message
+          : "Failed to update feature flags.",
+      );
+    } finally {
+      setFeatureFlagSaving((current) => ({ ...current, [name]: false }));
+    }
+  };
 
   const stats = [
     {
@@ -183,6 +305,72 @@ export default function AdminDashboardPage() {
             </div>
           </article>
         ))}
+      </motion.section>
+
+      <motion.section
+        variants={sectionVariants}
+        initial="hidden"
+        animate="visible"
+        transition={{ duration: 0.35, delay: 0.07 }}
+        className="grid gap-4 lg:grid-cols-2"
+      >
+        {featureItems.map((item) => {
+          const Icon = item.icon;
+          const flag = featureFlags[item.name];
+
+          return (
+            <article
+              key={item.name}
+              className="rounded-2xl border border-day-border bg-day-card p-6 shadow-card dark:border-night-border dark:bg-night-card dark:shadow-card-dark"
+            >
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex items-start gap-3">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-day-hover dark:bg-night-hover">
+                    <Icon className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h2 className="text-lg font-semibold">{item.label}</h2>
+                      {flag.beta ? (
+                        <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
+                          BETA
+                        </span>
+                      ) : null}
+                    </div>
+                    <p className="mt-2 text-sm text-day-text-secondary dark:text-night-text-secondary">
+                      {item.description}
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => void handleFeatureToggle(item.name)}
+                  disabled={featureFlagsLoading || featureFlagSaving[item.name]}
+                  className={`rounded-full px-4 py-2 text-sm font-semibold transition ${
+                    flag.enabled
+                      ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-300"
+                      : "bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-200"
+                  } disabled:cursor-not-allowed disabled:opacity-60`}
+                >
+                  {featureFlagSaving[item.name]
+                    ? "Saving..."
+                    : featureFlagsLoading
+                      ? "Loading..."
+                      : flag.enabled
+                        ? "Enabled"
+                        : "Disabled"}
+                </button>
+              </div>
+            </article>
+          );
+        })}
+
+        {featureFlagsError ? (
+          <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-300 lg:col-span-2">
+            {featureFlagsError}
+          </div>
+        ) : null}
       </motion.section>
 
       <motion.section
