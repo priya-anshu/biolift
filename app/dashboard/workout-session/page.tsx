@@ -104,6 +104,14 @@ function parseSessionSet(row: unknown): SessionSet {
   };
 }
 
+function sortSessionSets(a: SessionSet, b: SessionSet) {
+  return a.set_number - b.set_number;
+}
+
+function sortSessionExercises(a: SessionExercise, b: SessionExercise) {
+  return a.exercise_order - b.exercise_order;
+}
+
 function parseSessionExercise(row: unknown): SessionExercise {
   const exerciseRow = asRecord(row);
   const recommendedReps = asRecord(exerciseRow.recommended_reps);
@@ -134,7 +142,7 @@ function parseSessionExercise(row: unknown): SessionExercise {
     total_volume_kg: Number(toNumber(exerciseRow.total_volume_kg, 0).toFixed(2)),
     completed: Boolean(exerciseRow.completed),
     sets: Array.isArray(exerciseRow.sets)
-      ? exerciseRow.sets.map(parseSessionSet).sort((a, b) => a.set_number - b.set_number)
+      ? exerciseRow.sets.map(parseSessionSet).sort(sortSessionSets)
       : [],
   };
 }
@@ -236,7 +244,7 @@ export default function WorkoutSessionPage() {
       const parsedExercises: SessionExercise[] = Array.isArray(sessionPayload.exercises)
         ? sessionPayload.exercises
             .map(parseSessionExercise)
-            .sort((a, b) => a.exercise_order - b.exercise_order)
+            .sort(sortSessionExercises)
         : [];
 
       if (!sessionPayload.workoutLog) throw new Error("Missing workout log from session response");
@@ -274,7 +282,7 @@ export default function WorkoutSessionPage() {
     workoutRaw: unknown,
   ) => {
     const allSets: SessionSet[] = Array.isArray(allSetsRaw)
-      ? allSetsRaw.map(parseSessionSet).sort((a, b) => a.set_number - b.set_number)
+      ? allSetsRaw.map(parseSessionSet).sort(sortSessionSets)
       : [];
 
     const exercisePatch = asRecord(exerciseRaw);
