@@ -1,9 +1,9 @@
 "use client";
 
 import {
+  Area,
+  AreaChart,
   CartesianGrid,
-  Line,
-  LineChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -77,23 +77,30 @@ export default function BodyweightChart({ entries, loading = false }: Bodyweight
           </p>
         ) : (
           <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={weeklyData}>
-              <CartesianGrid strokeDasharray="3 3" strokeOpacity={0.2} />
+            <AreaChart data={weeklyData}>
+              <defs>
+                <linearGradient id="bodyweightChartFill" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.24} />
+                  <stop offset="95%" stopColor="#3b82f6" stopOpacity={0.04} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" strokeOpacity={0.18} />
               <XAxis dataKey="label" tick={{ fontSize: 11 }} />
               <YAxis tick={{ fontSize: 11 }} />
               <Tooltip />
-              <Line
+              <Area
                 type="monotone"
                 dataKey="value"
-                stroke="#f59e0b"
+                stroke="#3b82f6"
                 strokeWidth={3}
+                fill="url(#bodyweightChartFill)"
                 dot={false}
+                activeDot={{ r: 5, fill: "#3b82f6", stroke: "#111827", strokeWidth: 2 }}
               />
-            </LineChart>
+            </AreaChart>
           </ResponsiveContainer>
         )}
       </div>
     </Card>
   );
 }
-

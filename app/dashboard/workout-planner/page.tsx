@@ -78,11 +78,10 @@ const initialWizardData: WizardData = {
 };
 
 const goals = [
-  { id: "weight-loss", label: "Weight Loss", icon: Target, description: "Focus on cardio and calorie burning" },
-  { id: "muscle-gain", label: "Muscle Gain", icon: Dumbbell, description: "Strength training and hypertrophy" },
-  { id: "endurance", label: "Endurance", icon: Heart, description: "Improve cardiovascular fitness" },
-  { id: "flexibility", label: "Flexibility", icon: Activity, description: "Yoga and mobility work" },
-  { id: "general-fitness", label: "General Fitness", icon: Zap, description: "Balanced overall fitness" },
+  { id: "fat_loss", label: "Fat Loss", icon: Target, description: "Higher-rep sessions with calorie-focused training" },
+  { id: "hypertrophy", label: "Muscle Growth", icon: Dumbbell, description: "Hypertrophy-focused volume for building muscle" },
+  { id: "strength", label: "Strength", icon: Activity, description: "Lower-rep, higher-load training for force production" },
+  { id: "general_fitness", label: "General Fitness", icon: Zap, description: "Balanced training for all-around performance" },
 ] as const;
 
 const fitnessLevels = [
@@ -207,11 +206,15 @@ function buildWeeklySchedule(data: WizardData) {
 
 function mapGoalToApi(goal: string) {
   const goalMap: Record<string, string> = {
-    "weight-loss": "weight_loss",
-    "muscle-gain": "muscle_gain",
-    endurance: "endurance",
-    flexibility: "flexibility",
+    "weight-loss": "fat_loss",
+    "muscle-gain": "hypertrophy",
+    endurance: "general_fitness",
+    flexibility: "general_fitness",
+    fat_loss: "fat_loss",
+    hypertrophy: "hypertrophy",
+    strength: "strength",
     "general-fitness": "general_fitness",
+    general_fitness: "general_fitness",
   };
 
   return goalMap[goal] ?? "general_fitness";
@@ -1180,8 +1183,8 @@ export default function WorkoutPlannerPage() {
                 </h3>
                 <div className="flex flex-wrap gap-2">
                   {generatedExercises.length > 0 ? (
-                    generatedExercises.map((exercise) => (
-                      <Badge key={exercise} variant="ghost" size="sm">
+                    generatedExercises.map((exercise, index) => (
+                      <Badge key={`${exercise}-${index}`} variant="ghost" size="sm">
                         {exercise}
                       </Badge>
                     ))

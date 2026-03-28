@@ -12,6 +12,10 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Legacy React app and one-off maintenance scripts are not part of the current Next.js product.
+    "src/**",
+    "find_large_files.js",
+    "split_service.js",
   ]),
 ]);
 

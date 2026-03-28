@@ -10,6 +10,7 @@ import type { LucideIcon } from "lucide-react";
 import {
   Apple,
   Bell,
+  Bot,
   Calendar,
   ChevronDown,
   Dumbbell,
@@ -68,6 +69,7 @@ const defaultFeatureFlags: DashboardFeatureFlags = {
 
 const headerNavigation: NavItem[] = [
   { name: "Dashboard", href: "/dashboard", icon: Home },
+  { name: "Insights", href: "/dashboard/insights", icon: Bot },
   { name: "Workout", href: "/dashboard/workout-session", icon: Dumbbell },
   { name: "Ranking", href: "/dashboard/ranking", icon: Trophy },
   { name: "Progress", href: "/dashboard/progress", icon: LineChart },
@@ -79,6 +81,7 @@ const headerNavigation: NavItem[] = [
 
 const sidebarNavigation: NavItem[] = [
   { name: "Dashboard", href: "/dashboard", icon: Home },
+  { name: "Insights", href: "/dashboard/insights", icon: Bot },
   { name: "Workout", href: "/dashboard/workout-session", icon: Dumbbell },
   { name: "Ranking", href: "/dashboard/ranking", icon: Trophy },
   { name: "Progress", href: "/dashboard/progress", icon: LineChart },

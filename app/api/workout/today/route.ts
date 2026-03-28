@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { apiErrorResponse } from "@/lib/server/api";
 import { getWorkoutPlannerApiContext } from "@/lib/workout-planner/apiContext";
+import { buildCoachInsight } from "@/lib/workout-planner/insightEngine";
 import {
   getWorkoutRecommendations,
   isNoWorkoutPlanError,
@@ -74,6 +75,15 @@ function parseRequestInput(input: {
   };
 }
 
+function toNullableNumber(value: unknown) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim().length > 0) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
+
 function toActionLabel(action: ExerciseRecommendation["progression_action"]) {
   return action.replaceAll("_", " ").replace(/\b\w/g, (char) => char.toUpperCase());
 }
@@ -108,19 +118,37 @@ function buildRecoveryRecommendation(
     acwr?: number | null;
   } | null,
 ) {
-  const readiness = Number(recoveryState?.readiness_score ?? 50);
-  const fatigue = Number(recoveryState?.fatigue_score ?? 50);
-  const overtrainingRisk = Number(trainingLoadState?.overtraining_risk ?? 0);
-  const plateauRisk = Number(trainingLoadState?.plateau_risk ?? 0);
-  const acwr = Number(trainingLoadState?.acwr ?? 1);
+  const readiness = toNullableNumber(recoveryState?.readiness_score);
+  const fatigue = toNullableNumber(recoveryState?.fatigue_score);
+  const overtrainingRisk = toNullableNumber(trainingLoadState?.overtraining_risk);
+  const plateauRisk = toNullableNumber(trainingLoadState?.plateau_risk);
+  const acwr = toNullableNumber(trainingLoadState?.acwr);
 
-  if (readiness < 30 || overtrainingRisk >= 80 || acwr > 1.6) {
+  if (
+    readiness === null &&
+    fatigue === null &&
+    overtrainingRisk === null &&
+    plateauRisk === null &&
+    acwr === null
+  ) {
+    return "Recovery guidance will appear after a few logged workouts or recovery check-ins.";
+  }
+
+  if (
+    (readiness !== null && readiness < 30) ||
+    (overtrainingRisk !== null && overtrainingRisk >= 80) ||
+    (acwr !== null && acwr > 1.6)
+  ) {
     return "Recovery priority: reduce load, extend rest, and prioritize technique quality today.";
   }
-  if (readiness < 40 || fatigue >= 70 || overtrainingRisk >= 65) {
+  if (
+    (readiness !== null && readiness < 40) ||
+    (fatigue !== null && fatigue >= 70) ||
+    (overtrainingRisk !== null && overtrainingRisk >= 65)
+  ) {
     return "Moderate fatigue detected: keep volume controlled and avoid grinding sets.";
   }
-  if (plateauRisk >= 70 && readiness >= 55) {
+  if (plateauRisk !== null && plateauRisk >= 70 && readiness !== null && readiness >= 55) {
     return "Plateau detected: add a small overload stimulus with strict execution.";
   }
   return "Readiness is stable: follow the prescribed session and progress gradually.";
@@ -198,6 +226,13 @@ export async function GET(request: NextRequest) {
         trainingLoadState: loadRes.error ? null : loadRes.data ?? null,
         recoveryRecommendation:
           "Generate your first workout plan to unlock adaptive recommendations.",
+        coachInsight: buildCoachInsight({
+          requiresPlan: true,
+          recovery: recoveryRes.error ? null : recoveryRes.data ?? null,
+          trainingLoad: loadRes.error ? null : loadRes.data ?? null,
+          cacheState: "baseline",
+          cacheTtl: null,
+        }),
       });
     }
 
@@ -295,6 +330,14 @@ export async function GET(request: NextRequest) {
 
     const recoveryState = recoveryRes.error ? null : recoveryRes.data ?? null;
     const trainingLoadState = loadRes.error ? null : loadRes.data ?? null;
+    const coachInsight = buildCoachInsight({
+      recommendations: recommendationResult.recommendations,
+      recovery: recoveryState,
+      trainingLoad: trainingLoadState,
+      previewExercises,
+      cacheState: recommendationRead!.cacheState,
+      cacheTtl: recommendationRead!.cacheTtl,
+    });
 
     return NextResponse.json({
       requiresPlan: false,
@@ -310,6 +353,7 @@ export async function GET(request: NextRequest) {
         recoveryState,
         trainingLoadState,
       ),
+      coachInsight,
     });
   } catch (error) {
     return apiErrorResponse(error, "Failed to load today's workout", {

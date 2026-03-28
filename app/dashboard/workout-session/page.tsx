@@ -18,12 +18,14 @@ import {
 } from "lucide-react";
 import Card from "@/components/ui/Card";
 import Button from "@/components/ui/Button";
+import AICoachCard from "@/components/ai/AICoachCard";
 import PersonalRecordAlert from "@/components/workout/PersonalRecordAlert";
 import { WorkoutTimerControls } from "@/components/workout/WorkoutTimer";
 import { SessionControls } from "@/components/workout/SessionControls";
 import { ExerciseList } from "@/components/workout/ExerciseList";
 
 import type { TrainingIntelligenceResult, ExerciseRecommendation } from "@/lib/workout-planner/intelligenceEngine";
+import type { CoachInsight } from "@/lib/workout-planner/insightEngine";
 import type { SessionSet, SessionExercise, SessionWorkoutLog, SetStatus } from "@/components/workout/types";
 
 type PersonalRecordBadge = {
@@ -162,6 +164,7 @@ export default function WorkoutSessionPage() {
   const [prBadge, setPrBadge] = useState<PersonalRecordBadge | null>(null);
   const [finishing, setFinishing] = useState(false);
   const [requiresPlan, setRequiresPlan] = useState(false);
+  const [coachInsight, setCoachInsight] = useState<CoachInsight | null>(null);
   
   const [finishNotes, setFinishNotes] = useState("");
   const [finishCalories, setFinishCalories] = useState("");
@@ -236,10 +239,12 @@ export default function WorkoutSessionPage() {
         setWorkoutLog(null);
         setExercises([]);
         setResult(null);
+        setCoachInsight((sessionPayload.coachInsight ?? null) as CoachInsight | null);
         return;
       }
       
       setResult(sessionPayload.recommendations ?? null);
+      setCoachInsight((sessionPayload.coachInsight ?? null) as CoachInsight | null);
 
       const parsedExercises: SessionExercise[] = Array.isArray(sessionPayload.exercises)
         ? sessionPayload.exercises
@@ -259,6 +264,7 @@ export default function WorkoutSessionPage() {
       setWarmupCompleted(parsedExercises.some((row) => row.completed_sets > 0));
       setCooldownCompleted(sessionPayload.workoutLog.status === "completed");
     } catch (err) {
+      setCoachInsight(null);
       setError(err instanceof Error ? err.message : "Failed to initialize");
     } finally {
       setInitializing(false);
@@ -391,17 +397,20 @@ export default function WorkoutSessionPage() {
 
   if (requiresPlan) {
     return (
-      <Card className="p-6">
-        <h1 className="text-2xl font-semibold">Workout Session</h1>
-        <p className="mt-2 text-sm text-day-text-secondary dark:text-night-text-secondary">
-          Generate your first workout plan before starting a session.
-        </p>
-        <div className="mt-4">
-          <Link href="/dashboard/workout-planner" className="rounded-lg bg-day-accent-primary px-4 py-2 text-sm font-semibold text-white dark:bg-night-accent">
-            Generate Your First Workout Plan
-          </Link>
-        </div>
-      </Card>
+      <div className="space-y-6">
+        <AICoachCard insight={coachInsight} requiresPlan />
+        <Card className="p-6">
+          <h1 className="text-2xl font-semibold">Workout Session</h1>
+          <p className="mt-2 text-sm text-day-text-secondary dark:text-night-text-secondary">
+            Generate your first workout plan before starting a session.
+          </p>
+          <div className="mt-4">
+            <Link href="/dashboard/workout-planner" className="rounded-lg bg-day-accent-primary px-4 py-2 text-sm font-semibold text-white dark:bg-night-accent">
+              Generate Your First Workout Plan
+            </Link>
+          </div>
+        </Card>
+      </div>
     );
   }
 
@@ -635,6 +644,8 @@ export default function WorkoutSessionPage() {
         </div>
 
         <div className="space-y-6">
+          {coachInsight ? <AICoachCard insight={coachInsight} /> : null}
+
           <Card className="p-6">
             <h3 className="mb-4 text-lg font-semibold text-day-text-primary dark:text-night-text-primary">
               Workout Stats

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { apiErrorResponse } from "@/lib/server/api";
 import { logger } from "@/lib/server/logger";
 import { getWorkoutPlannerApiContext } from "@/lib/workout-planner/apiContext";
+import { buildCoachInsight } from "@/lib/workout-planner/insightEngine";
 import {
   getWorkoutRecommendations,
   isNoWorkoutPlanError,
@@ -533,6 +534,22 @@ async function buildSessionRows(
     )
     .single();
   if (logUpdateRes.error) throw new Error(logUpdateRes.error.message);
+  const coachInsight = buildCoachInsight({
+    recommendations: orderedRecommendations.map((row) => ({
+      progression_action: row.progression_action,
+      recommendation_reason: row.recommendation_reason,
+    })),
+    recovery: {
+      readiness_score: recommendationRead.recommendations.readiness_score,
+      fatigue_score: recommendationRead.recommendations.fatigue_score,
+    },
+    previewExercises: exercises.map((exercise) => ({
+      exercise_name: exercise.exercise_name,
+      muscle_group: exercise.muscle_group,
+    })),
+    cacheState: recommendationRead.cacheState,
+    cacheTtl: recommendationRead.cacheTtl,
+  });
 
   return {
     workoutLog: logUpdateRes.data,
@@ -540,6 +557,7 @@ async function buildSessionRows(
     exercises,
     cacheState: recommendationRead.cacheState,
     cacheTtl: recommendationRead.cacheTtl,
+    coachInsight,
   };
 }
 
@@ -809,6 +827,7 @@ export async function GET(request: NextRequest) {
           exercises: [],
           cacheState: "baseline",
           cacheTtl: null,
+          coachInsight: buildCoachInsight({ requiresPlan: true }),
         });
       }
       throw sessionError;

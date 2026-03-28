@@ -780,8 +780,14 @@ export default function ProgressPage() {
             ) : (
               <div className="h-72">
                 <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={weightTrendData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#CBD5E1" opacity={0.35} />
+                  <AreaChart data={weightTrendData}>
+                    <defs>
+                      <linearGradient id="weightTrendFill" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#3B82F6" stopOpacity={0.24} />
+                        <stop offset="95%" stopColor="#3B82F6" stopOpacity={0.04} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#CBD5E1" opacity={0.18} />
                     <XAxis dataKey="label" tickLine={false} axisLine={false} />
                     <YAxis tickLine={false} axisLine={false} domain={["dataMin - 1", "dataMax + 1"]} />
                     <Tooltip
@@ -791,15 +797,16 @@ export default function ProgressPage() {
                       ]}
                       labelFormatter={(_, payload) => payload?.[0]?.payload?.fullDate ?? ""}
                     />
-                    <Line
+                    <Area
                       type="monotone"
                       dataKey="weight"
-                      stroke="#2563EB"
+                      stroke="#3B82F6"
                       strokeWidth={3}
-                      dot={{ r: 4, fill: "#2563EB" }}
-                      activeDot={{ r: 6 }}
+                      fill="url(#weightTrendFill)"
+                      dot={false}
+                      activeDot={{ r: 5, fill: "#3B82F6", stroke: "#111827", strokeWidth: 2 }}
                     />
-                  </LineChart>
+                  </AreaChart>
                 </ResponsiveContainer>
               </div>
             )}

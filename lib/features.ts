@@ -1,5 +1,6 @@
 import "server-only";
 
+import { unstable_noStore as noStore } from "next/cache";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 
 export const defaultFeatureFlags = {
@@ -30,6 +31,7 @@ export function isFeatureFlagName(value: string): value is FeatureFlagName {
 }
 
 export async function getFeatureFlags(): Promise<FeatureFlags> {
+  noStore();
   const adminClient = createSupabaseAdminClient();
   const { data, error } = await adminClient
     .from("feature_flags")

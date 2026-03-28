@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { apiErrorResponse } from "@/lib/server/api";
 import { getWorkoutPlannerApiContext } from "@/lib/workout-planner/apiContext";
+import { buildCoachInsight } from "@/lib/workout-planner/insightEngine";
 import {
   getDashboardSummary,
+  refreshLeaderboardForUser,
   getWorkoutRecommendations,
   isNoWorkoutPlanError,
 } from "@/lib/workout-planner/service";
@@ -20,6 +22,15 @@ function parseLimit(value: string | null) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return 6;
   return Math.max(1, Math.min(30, Math.floor(parsed)));
+}
+
+function toNullableNumber(value: unknown) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim().length > 0) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
 }
 
 function buildDedupeKey(
@@ -52,19 +63,23 @@ function buildRecoveryRecommendation(
     acwr?: number | null;
   } | null,
 ) {
-  const readiness = Number(recovery?.readiness_score ?? 50);
-  const fatigue = Number(recovery?.fatigue_score ?? 50);
-  const overtraining = Number(trainingLoad?.overtraining_risk ?? 0);
-  const plateau = Number(trainingLoad?.plateau_risk ?? 0);
-  const acwr = Number(trainingLoad?.acwr ?? 1);
+  const readiness = toNullableNumber(recovery?.readiness_score);
+  const fatigue = toNullableNumber(recovery?.fatigue_score);
+  const overtraining = toNullableNumber(trainingLoad?.overtraining_risk);
+  const plateau = toNullableNumber(trainingLoad?.plateau_risk);
+  const acwr = toNullableNumber(trainingLoad?.acwr);
 
-  if (readiness < 30 || overtraining >= 80 || acwr > 1.6) {
+  if (readiness === null && fatigue === null && overtraining === null && plateau === null && acwr === null) {
+    return "Recovery guidance will appear after a few logged workouts or recovery check-ins.";
+  }
+
+  if ((readiness !== null && readiness < 30) || (overtraining !== null && overtraining >= 80) || (acwr !== null && acwr > 1.6)) {
     return "High recovery demand today. Keep intensity low and prioritize mobility work.";
   }
-  if (readiness < 40 || fatigue >= 70 || overtraining >= 65) {
+  if ((readiness !== null && readiness < 40) || (fatigue !== null && fatigue >= 70) || (overtraining !== null && overtraining >= 65)) {
     return "Moderate fatigue detected. Stay technical and keep a conservative effort cap.";
   }
-  if (plateau >= 70 && readiness >= 55) {
+  if (plateau !== null && plateau >= 70 && readiness !== null && readiness >= 55) {
     return "Performance plateau detected. A small overload step is recommended.";
   }
   return "Recovery signals are stable. Follow your planned workload and progress gradually.";
@@ -236,10 +251,45 @@ export async function GET(request: NextRequest) {
     const trainingStats = (summary as { trainingStats?: Record<string, unknown> }).trainingStats;
     const trainingLoad = trainingLoadRes.error ? null : trainingLoadRes.data ?? null;
     const recovery = recoveryRes.error ? null : recoveryRes.data ?? null;
-    const leaderboard = leaderboardRes.data ?? null;
+    let leaderboard = leaderboardRes.data ?? null;
+    if (!leaderboard) {
+      leaderboard = await refreshLeaderboardForUser({
+        client: api.adminClient,
+        profileId: api.current.profileId,
+      });
+    }
+    let leaderboardRank =
+      leaderboard && Number(leaderboard.position ?? 0) > 0
+        ? Number(leaderboard.position)
+        : null;
+    if (leaderboard && leaderboardRank === null) {
+      const higherScoreRes = await api.adminClient
+        .from("leaderboard")
+        .select("id", { head: true, count: "exact" })
+        .gt("total_score", Number(leaderboard.total_score ?? 0));
+      if (higherScoreRes.error) {
+        throw new Error(higherScoreRes.error.message);
+      }
+      leaderboardRank = Number(higherScoreRes.count ?? 0) + 1;
+    }
+    const coachInsight = buildCoachInsight({
+      requiresPlan,
+      recommendations: recommendationRead?.recommendations.recommendations ?? [],
+      recovery,
+      trainingLoad,
+      trainingStats: {
+        workouts_completed_7d: Number(trainingStats?.workouts_completed_7d ?? 0) || 0,
+        consistency_score: Number(trainingStats?.consistency_score ?? 0) || 0,
+        streak_days: Number(trainingStats?.streak_days ?? 0) || 0,
+      },
+      previewExercises,
+      cacheState: recommendationRead?.cacheState ?? "baseline",
+      cacheTtl: recommendationRead?.cacheTtl ?? null,
+    });
 
     return NextResponse.json({
       ...summary,
+      coachInsight,
       requiresPlan,
       todayWorkout: {
         workoutDate,
@@ -248,7 +298,7 @@ export async function GET(request: NextRequest) {
         planId: recommendationRead?.recommendations.plan_id ?? null,
         readinessBand: recommendationRead?.recommendations.readiness_band ?? "yellow",
         readinessScore: recommendationRead?.recommendations.readiness_score ?? null,
-        fatigueScore: recommendationRead?.recommendations.fatigue_score ?? 50,
+        fatigueScore: recommendationRead?.recommendations.fatigue_score ?? null,
         previewExercises,
       },
       recoveryStatus: {
@@ -265,7 +315,7 @@ export async function GET(request: NextRequest) {
       },
       leaderboardSummary: leaderboard
         ? {
-            rank: leaderboard.position,
+            rank: leaderboardRank,
             tier: leaderboard.tier,
             totalScore: leaderboard.total_score,
             activityDays14d: leaderboard.activity_days_14d,

@@ -29,6 +29,26 @@ const WORKOUT_STATUSES: WorkoutStatus[] = [
 ];
 const CALENDAR_STATUSES = ["completed", "missed", "rest_day", "planned"] as const;
 
+function normalizePlannerGoal(value: string): PlannerGoal | null {
+  const normalized = value.trim().toLowerCase();
+  const aliases: Record<string, PlannerGoal> = {
+    fat_loss: "fat_loss",
+    "fat-loss": "fat_loss",
+    weight_loss: "fat_loss",
+    "weight-loss": "fat_loss",
+    hypertrophy: "hypertrophy",
+    muscle_gain: "hypertrophy",
+    "muscle-gain": "hypertrophy",
+    strength: "strength",
+    general_fitness: "general_fitness",
+    "general-fitness": "general_fitness",
+    endurance: "general_fitness",
+    flexibility: "general_fitness",
+  };
+
+  return aliases[normalized] ?? null;
+}
+
 function sanitizeText(value: unknown, fallback = "") {
   if (typeof value !== "string") return fallback;
   return value.replace(/\s+/g, " ").trim();
@@ -124,8 +144,9 @@ export function validatePlannerRequest(payload: unknown): PlannerRequest {
   }
   const source = payload as Record<string, unknown>;
 
-  const goalRaw = sanitizeText(source.goal).toLowerCase();
-  if (!GOALS.includes(goalRaw as PlannerGoal)) {
+  const goalRaw = sanitizeText(source.goal);
+  const goal = normalizePlannerGoal(goalRaw);
+  if (!goal || !GOALS.includes(goal)) {
     throw new Error("goal is invalid");
   }
   const experienceRaw = sanitizeText(source.experienceLevel).toLowerCase();
@@ -141,7 +162,7 @@ export function validatePlannerRequest(payload: unknown): PlannerRequest {
 
   return {
     name,
-    goal: goalRaw as PlannerGoal,
+    goal,
     experienceLevel: experienceRaw as ExperienceLevel,
     workoutDaysPerWeek,
     preferredEquipment: sanitizeTextArray(source.preferredEquipment),

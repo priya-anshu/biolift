@@ -3,7 +3,7 @@
 import Image from "next/image";
 import { motion } from "framer-motion";
 import { Settings, Star, Trophy } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import Card from "@/components/ui/Card";
 import Button from "@/components/ui/Button";
@@ -47,7 +47,7 @@ function formatScore(value: number | null | undefined) {
 export default function RankingPage() {
   const { user } = useAuth();
   const [leaderboard, setLeaderboard] = useState<LeaderboardRow[]>([]);
-  const [profileId, setProfileId] = useState<string | null>(null);
+  const [myEntry, setMyEntry] = useState<LeaderboardRow | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<"leaderboard" | "my-rank" | "admin">(
     "leaderboard",
@@ -60,8 +60,8 @@ export default function RankingPage() {
       setError(null);
 
       if (!user) {
-        setProfileId(null);
         setLeaderboard([]);
+        setMyEntry(null);
         setLoading(false);
         return;
       }
@@ -84,16 +84,20 @@ export default function RankingPage() {
             profiles: Array.isArray(row.profiles) ? row.profiles[0] ?? null : row.profiles,
           }))
           .sort((a, b) => Number(b.total_score ?? 0) - Number(a.total_score ?? 0));
+        const normalizedMyEntry = payload.myEntry
+          ? {
+              ...payload.myEntry,
+              profiles: Array.isArray(payload.myEntry.profiles)
+                ? payload.myEntry.profiles[0] ?? null
+                : payload.myEntry.profiles ?? null,
+            }
+          : null;
 
         setLeaderboard(normalized);
-        setProfileId(
-          typeof payload.profileId === "string"
-            ? payload.profileId
-            : payload.myEntry?.user_id ?? null,
-        );
+        setMyEntry(normalizedMyEntry);
       } catch (loadError) {
         setLeaderboard([]);
-        setProfileId(null);
+        setMyEntry(null);
         setError(
           loadError instanceof Error
             ? loadError.message
@@ -106,11 +110,6 @@ export default function RankingPage() {
 
     void load();
   }, [user]);
-
-  const myEntry = useMemo(() => {
-    if (!profileId) return null;
-    return leaderboard.find((entry) => entry.user_id === profileId) ?? null;
-  }, [leaderboard, profileId]);
 
   const isAdmin =
     (user?.app_metadata?.role as string | undefined) === "admin" ||
@@ -207,6 +206,14 @@ export default function RankingPage() {
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <span className="text-day-text-secondary dark:text-night-text-secondary">
+                  Rank
+                </span>
+                <span className="font-semibold text-day-text-primary dark:text-night-text-primary">
+                  {myEntry.position ? `#${myEntry.position}` : "-"}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-day-text-secondary dark:text-night-text-secondary">
                   Overall Score
                 </span>
                 <span className="font-semibold text-day-text-primary dark:text-night-text-primary">
@@ -254,7 +261,7 @@ export default function RankingPage() {
       ) : (
         <div className="text-center py-12">
           <p className="text-day-text-secondary dark:text-night-text-secondary">
-            Please log in to view your ranking
+            Ranking will appear after your profile gets its first leaderboard snapshot.
           </p>
         </div>
       );

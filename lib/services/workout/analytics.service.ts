@@ -536,31 +536,67 @@ export async function refreshLeaderboardForUser(context: ServiceContext) {
   return upsertRes.data;
 }
 
+async function getComputedLeaderboardPosition(
+  context: ServiceContext,
+  totalScore: number,
+) {
+  const higherScoreRes = await context.client
+    .from("leaderboard")
+    .select("id", { head: true, count: "exact" })
+    .gt("total_score", totalScore);
+  if (higherScoreRes.error) throw new Error(higherScoreRes.error.message);
+  return Number(higherScoreRes.count ?? 0) + 1;
+}
+
 export async function getRankingOverview(context: ServiceContext) {
+  const refreshedEntry = await refreshLeaderboardForUser(context);
   const leaderboardRes = await context.client
     .from("leaderboard")
     .select(
       "id,user_id,total_score,strength_score,stamina_score,consistency_score,improvement_score,tier,position,activity_days_14d,streak_days,updated_at,profiles(name,avatar_url)",
     )
     .order("total_score", { ascending: false })
+    .order("consistency_score", { ascending: false })
+    .order("improvement_score", { ascending: false })
+    .order("updated_at", { ascending: false })
     .limit(100);
   if (leaderboardRes.error) throw new Error(leaderboardRes.error.message);
 
   const normalized: Array<Record<string, unknown>> = (
     (leaderboardRes.data ?? []) as Array<Record<string, unknown>>
-  ).map((row) => {
-    const profileRaw = row.profiles;
-    const profile = Array.isArray(profileRaw) ? profileRaw[0] : profileRaw;
-    return {
+  )
+    .map((row) => {
+      const profileRaw = row.profiles;
+      const profile = Array.isArray(profileRaw) ? profileRaw[0] : profileRaw;
+      return {
+        ...row,
+        profiles: profile ?? null,
+      };
+    })
+    .map((row, index) => ({
       ...row,
-      profiles: profile ?? null,
-    };
-  });
+      position: index + 1,
+    }));
 
-  const myEntry =
-    (normalized.find((row) => String(row.user_id) === context.profileId) as
-      | Record<string, unknown>
-      | undefined) ?? null;
+  const leaderboardEntry =
+    normalized.find((row) => String(row.user_id) === context.profileId) ?? null;
+  const fallbackPosition = await getComputedLeaderboardPosition(
+    context,
+    parseNumeric(refreshedEntry.total_score, 0),
+  );
+  const myEntry = leaderboardEntry
+    ? ({
+        ...leaderboardEntry,
+        position:
+          Number(leaderboardEntry.position ?? 0) > 0
+            ? leaderboardEntry.position
+            : fallbackPosition,
+      } as Record<string, unknown>)
+    : ({
+        ...refreshedEntry,
+        position: fallbackPosition,
+        profiles: null,
+      } as Record<string, unknown>);
 
   return {
     profileId: context.profileId,

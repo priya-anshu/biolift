@@ -417,8 +417,8 @@ export async function enqueueDailyRefreshForActiveUsers(
     ),
   );
 
-  let enqueued = userIds.length;
-  let deduped = 0; // Handled silently by the DB constraint
+  const enqueued = userIds.length;
+  const deduped = 0; // Handled silently by the DB constraint
 
   const priority = priorityForJobType("daily_refresh");
   const runAfter = new Date().toISOString();
