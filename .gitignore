@@ -41,4 +41,7 @@ yarn-error.log*
 next-env.d.ts
 /src
 /supabase
-/database
+/database/*
+!/database/nutrition/
+!/database/nutrition/001_nutrition_tracking.sql
+!/database
